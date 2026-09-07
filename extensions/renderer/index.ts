@@ -34,6 +34,7 @@ import { getToolMouseTui } from "./mouse/scroll.ts";
 import { setHoveredToolGroup, setHoveredToolIo } from "./mouse/hover.ts";
 import { clearAllAnimations } from "./tool/result.ts";
 import { installWriteOverride, WriteExecutionMetadataStore } from "./tool/diff/index.ts";
+import { installGitDiffCommand } from "./git-diff.ts";
 import {
 	installMessageDisplayRendering,
 	refreshMessageDisplays,
@@ -135,6 +136,8 @@ export default function (
 		};
 		return installation;
 	};
+
+	installGitDiffCommand(pi);
 
 	pi.registerCommand("ccstyle", {
 		description: "Configure Claude Code style and rich diff options",
