@@ -419,6 +419,7 @@ export function renderUnified(
 			ctx.inlineHighlights,
 			ctx.palette,
 			ctx.highlightLine,
+			ctx.theme,
 			ctx.containerBgAnsi,
 		);
 		return renderLineCell(
@@ -470,6 +471,7 @@ export function renderCompact(entries: ParsedDiffEntry[], ctx: DiffRenderContext
 			ctx.inlineHighlights,
 			ctx.palette,
 			ctx.highlightLine,
+			ctx.theme,
 			ctx.containerBgAnsi,
 		);
 		return renderCompactLineCell(
@@ -551,6 +553,7 @@ function renderSplitCell(
 		inlineHighlights,
 		palette,
 		highlightLine,
+		theme,
 		containerBgAnsi,
 	);
 	return renderLineCell(

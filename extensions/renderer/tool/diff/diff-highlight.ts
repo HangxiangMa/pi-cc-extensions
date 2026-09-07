@@ -5,6 +5,7 @@ import { MAX_HL_CHARS, shikiHighlightCache } from "./shiki-highlight.ts";
 import { normalizeCodeWhitespace } from "./diff-text.ts";
 import {
 	applyInlineSpanHighlight,
+	colorizeSegment,
 	getLineBackground,
 	resolveShikiTheme,
 	type DiffPalette,
@@ -97,15 +98,26 @@ export function highlightDiffLine(
 	inlineHighlights: WeakMap<DiffLineEntry, DiffSpan[]>,
 	palette: DiffPalette,
 	highlightLine: CodeLineHighlighter,
+	theme: DiffTheme,
 	containerBgAnsi: string | undefined,
 ): { highlighted: string; rowBg: string | undefined } {
 	const syntaxHighlighted = highlightLine(codeText, entry);
 	const rowBg = getLineBackground(entry.lineKind, palette, false);
 	const emphasisBg = getLineBackground(entry.lineKind, palette, true);
 	const inlineSpans = inlineHighlights.get(entry) ?? [];
+	// Syntax highlighters commonly color identifiers/strings green. That is
+	// correct for context lines but makes removed lines look like additions.
+	// Diff semantics own foreground color on changed rows; keep syntax colors
+	// only for context, matching bat/Claude diff presentation.
+	const semanticHighlighted =
+		entry.lineKind === "add"
+			? colorizeSegment(theme, "toolDiffAdded", codeText, rowBg)
+			: entry.lineKind === "remove"
+				? colorizeSegment(theme, "toolDiffRemoved", codeText, rowBg)
+				: syntaxHighlighted;
 	const highlighted = applyInlineSpanHighlight(
 		codeText,
-		syntaxHighlighted,
+		semanticHighlighted,
 		inlineSpans,
 		emphasisBg,
 		rowBg,

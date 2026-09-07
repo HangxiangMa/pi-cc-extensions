@@ -1,4 +1,5 @@
-import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { inspect } from "node:util";
 import { config } from "../../config/config.ts";
 import { showMoreHintText } from "./show-more-hint.ts";
@@ -397,12 +398,29 @@ export class ExpandedToolIoView {
 				return false;
 			}
 			const sourceLines = raw.split("\n");
-			const wrapped: string[] = [];
-			for (const source of sourceLines) {
-				const styled = opts.input ? styleInputLine(source) : theme.fg(bodyColor, source);
-				const parts = wrapTextWithAnsi(styled, contentWidth);
-				if (parts.length === 0) wrapped.push(styled);
-				else wrapped.push(...parts);
+			let wrapped: string[] = [];
+			if (!opts.input) {
+				// Tool output is Markdown too. Rendering it as one styled line per
+				// source line loses fenced code blocks, inline code, lists, and
+				// headings. Let Pi's Markdown component build the rows first, then
+				// add the tool rail and truncation affordance around those rows.
+				try {
+					const markdown = new Markdown(raw, 0, 0, getMarkdownTheme(), {
+						color: (text: string) => theme.fg(bodyColor, text),
+					});
+					wrapped = markdown.render(contentWidth);
+				} catch {
+					wrapped = [];
+				}
+			}
+			if (opts.input || wrapped.length === 0) {
+				wrapped = [];
+				for (const source of sourceLines) {
+					const styled = opts.input ? styleInputLine(source) : theme.fg(bodyColor, source);
+					const parts = wrapTextWithAnsi(styled, contentWidth);
+					if (parts.length === 0) wrapped.push(styled);
+					else wrapped.push(...parts);
+				}
 			}
 			// Prefer source-line count so plain multi-line dumps always cap, even when
 			// theme/wrap measurements disagree slightly.
