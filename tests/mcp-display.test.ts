@@ -14,6 +14,12 @@ test("MCP display identity shows server/tool without adapter duplication", () =>
 	assert.equal(mcpToolDisplayName({ server: "confluence", search: "ignored" }), "confluence/search");
 });
 
+test("delegating tool summaries show called tool without arguments", () => {
+	const summary = toolCallSummary("tool_call", { tool: "ip_catalog/search", args: { query: "secret" } });
+	assert.equal(summary.main, "Tool Call ip_catalog/search");
+	assert.doesNotMatch(summary.main, /secret/);
+});
+
 test("MCP summaries do not include call arguments", () => {
 	const summary = toolCallSummary(
 		"mcp",
