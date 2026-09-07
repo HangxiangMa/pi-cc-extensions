@@ -5,6 +5,29 @@ function clip(value: unknown): string {
 	return oneLine(value, config.inputClip);
 }
 
+/** Stable, redacted MCP identity for compact tool cards. Never renders arguments/results. */
+export function mcpToolDisplayName(args: any): string {
+	if (!args || typeof args !== "object") return "call";
+	let server = typeof args.server === "string" ? args.server.trim() : "";
+	let operation = typeof args.tool === "string" ? args.tool.trim() : "";
+	if (!operation && typeof args.describe === "string") operation = args.describe.trim();
+	if (!operation && typeof args.search === "string") operation = "search";
+	if (!operation && typeof args.connect === "string") operation = "connect";
+	if (!operation && typeof args.action === "string") operation = args.action.trim();
+
+	// describe accepts server/tool while call uses server + adapter-prefixed tool.
+	if (!server && operation.includes("/")) {
+		const slash = operation.indexOf("/");
+		server = operation.slice(0, slash);
+		operation = operation.slice(slash + 1);
+	}
+	if (server && operation.toLowerCase().startsWith(`${server.toLowerCase()}_`)) {
+		operation = operation.slice(server.length + 1);
+	}
+	if (!operation) return server || "call";
+	return server ? `${server}/${operation}` : operation;
+}
+
 /**
  * 工具名/标签人性化：与 default-mode 的 humanizeToolLabel、grouping 的 humanizeToolName
  * 逐字相同，收敛为一个共享实现。
@@ -74,6 +97,9 @@ export function toolCallSummary(
 	}
 	if (variant === "default" && name === "agents") {
 		return { main: value("launch agents", "description", "prompt"), detail: "" };
+	}
+	if (name === "mcp" || name === "tool" || name === "tool_call" || name === "toolcall") {
+		return { main: `${title} ${mcpToolDisplayName(args)}`, detail: "" };
 	}
 	if (name === "skill") return { main: value("run skill", "name"), detail: "" };
 	if (name === "enterplanmode" || name === "enter_plan_mode") {

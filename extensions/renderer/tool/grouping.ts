@@ -10,7 +10,7 @@ import { TOOL_LOADING_INTERVAL_MS, toolLoadingIcon } from "../../utils/tool-load
 import { isToolTuiFullscreen, showMoreHintText } from "./show-more-hint.ts";
 import { stripAnsi, stripBackgroundAnsi, stripLeadingStatusIcon } from "../../utils/ansi-text.ts";
 import { walkComponentTree } from "../../utils/component-tree.ts";
-import { humanizeToolLabel, toolCallSummary } from "./names.ts";
+import { humanizeToolLabel, mcpToolDisplayName, toolCallSummary } from "./names.ts";
 import {
 	patchRegistry,
 	TOOL_GROUPING_GENERATION_KEY as GENERATION_KEY,
@@ -143,12 +143,28 @@ export function paddedBackgroundRow(
 }
 
 function toolSummary(tool: any): { main: string; detail: string } {
+	if (isDelegatingTool(tool)) return { main: mcpToolDisplayName(tool?.args), detail: "" };
 	return toolCallSummary(toolName(tool), tool?.args ?? {}, { variant: "grouping" });
+}
+
+function isMcpTool(tool: any): boolean {
+	return toolName(tool).toLowerCase() === "mcp";
+}
+
+function isDelegatingTool(tool: any): boolean {
+	return new Set(["mcp", "tool", "tool_call", "toolcall"]).has(toolName(tool).toLowerCase());
+}
+
+function displayToolName(tool: any): string {
+	return isDelegatingTool(tool) ? mcpToolDisplayName(tool?.args) : toolName(tool);
 }
 
 function toolNameList(tools: any[]): string {
 	const counts = new Map<string, number>();
-	for (const tool of tools) counts.set(toolName(tool), (counts.get(toolName(tool)) ?? 0) + 1);
+	for (const tool of tools) {
+		const name = displayToolName(tool);
+		counts.set(name, (counts.get(name) ?? 0) + 1);
+	}
 	return [...counts].map(([name, count]) => `${name}${count > 1 ? `×${count}` : ""}`).join(", ");
 }
 
@@ -302,15 +318,20 @@ export class ToolGroupComponent extends Container {
 			})
 			.join(` ${fg("dim", "•")} `);
 		const names = new Set(this.children.map(toolName));
-		const label =
-			names.size === 1 ? humanizeToolLabel(toolName(this.children[0])) : "Multiple Tools";
+		const allMcp = this.children.length > 0 && this.children.every(isMcpTool);
+		const allDelegating = this.children.length > 0 && this.children.every(isDelegatingTool);
+		const label = allMcp
+			? "MCP"
+			: names.size === 1
+				? humanizeToolLabel(toolName(this.children[0]))
+				: "Multiple Tools";
 		const overall: ToolStatus = counts.error ? "error" : counts.pending ? "pending" : "success";
 		if (
 			(this.children as any[]).some((tool) => tool?.executionStarted && status(tool) === "pending")
 		)
 			scheduleGroupAnimation(this.patch);
 		const overallColor = overall === "pending" ? "accent" : overall;
-		const nameList = names.size > 1 ? ` ${fg("dim", `• ${toolNameList(this.children)}`)}` : "";
+		const nameList = allDelegating || names.size > 1 ? ` ${fg("dim", `• ${toolNameList(this.children)}`)}` : "";
 		// 圆点保持 dim；hover 只高亮可点击文字。
 		const hint = `${fg("dim", "•")} ${fg(this.hintHovered ? "text" : "dim", showMoreHintText())}`;
 		const lines = [
