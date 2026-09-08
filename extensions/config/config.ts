@@ -20,8 +20,8 @@ export interface ToolDisplayConfig {
 }
 
 export const DEFAULT_TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
-	diffViewMode: "auto",
-	diffIndicatorMode: "bars",
+	diffViewMode: "unified",
+	diffIndicatorMode: "classic",
 	diffSplitMinWidth: 120,
 	/** Collapsed edit/diff body: ~half a typical terminal after chrome. */
 	editDiffCollapsedLines: 24,
