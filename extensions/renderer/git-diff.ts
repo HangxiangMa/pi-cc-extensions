@@ -121,7 +121,13 @@ export function installGitDiffCommand(pi: ExtensionAPI): void {
 				const richDiff = renderEditDiffResult(
 					{ diff: loaded.text },
 					{ expanded: true, filePath: safePathArg(args), invalidate: () => tui.requestRender() },
-					config as ToolDisplayConfig,
+					{
+						...config,
+						// /diff is a review command: use Claude-style unified +/- rows,
+						// not the side-by-side tool-card presentation.
+						diffViewMode: "unified",
+						diffIndicatorMode: "classic",
+					} as ToolDisplayConfig,
 					theme,
 					"",
 				);
