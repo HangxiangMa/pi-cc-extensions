@@ -128,7 +128,13 @@ function renderCodeDivider(
 	);
 }
 
-function getLineNumberColor(kind: DiffLineKind): "dim" | "toolDiffAdded" | "toolDiffRemoved" {
+function getLineNumberColor(
+	kind: DiffLineKind,
+	indicatorMode: DiffIndicatorMode = "bars",
+): "dim" | "toolDiffAdded" | "toolDiffRemoved" {
+	// Claude-style unified diffs color only the +/- marker. Keep line numbers
+	// and source text on their normal gray/syntax colors.
+	if (indicatorMode === "classic") return "dim";
 	if (kind === "add") {
 		return "toolDiffAdded";
 	}
@@ -143,8 +149,9 @@ function renderLineNumberSegment(
 	lineNumber: string,
 	theme: DiffTheme,
 	rowBg: string | undefined,
+	indicatorMode: DiffIndicatorMode = "bars",
 ): string {
-	return colorizeSegment(theme, getLineNumberColor(kind), lineNumber, rowBg);
+	return colorizeSegment(theme, getLineNumberColor(kind, indicatorMode), lineNumber, rowBg);
 }
 
 function getLinePrefixPlainWidth(
@@ -175,9 +182,11 @@ function renderClassicContentPrefix(
 	}
 
 	const glyph = kind === "add" ? "+" : "-";
-	const glyphColor = kind === "add" ? "toolDiffAdded" : "toolDiffRemoved";
+	// Claude-style classic diff: row background carries add/remove semantics;
+	// marker and source text keep normal foreground color.
+	const marker = colorizeSegment(theme, "dim", glyph, rowBg);
 	const spacer = rowBg ? `${rowBg} ` : " ";
-	return `${colorizeSegment(theme, glyphColor, glyph, rowBg)}${spacer}`;
+	return `${marker}${spacer}`;
 }
 
 function renderLinePrefix(
@@ -189,7 +198,7 @@ function renderLinePrefix(
 	continuation = false,
 	hashlineGutter = false,
 ): string {
-	const number = renderLineNumberSegment(kind, lineNumber, theme, rowBg);
+	const number = renderLineNumberSegment(kind, lineNumber, theme, rowBg, indicatorMode);
 	if (hashlineGutter) {
 		return number;
 	}
@@ -422,10 +431,14 @@ export function renderUnified(
 			ctx.theme,
 			ctx.containerBgAnsi,
 		);
+		// Classic unified mode matches Claude: retain red/green row backgrounds,
+		// but keep changed source text on the normal gray foreground.
+		const renderedCode =
+			ctx.indicatorMode === "classic" ? ctx.theme.fg("toolOutput", codeText) : highlighted;
 		return renderLineCell(
 			buildLineCellParams(
 				entry.lineKind,
-				highlighted,
+				renderedCode,
 				ctx.width,
 				rowBg,
 				ctx.containerBgAnsi,
