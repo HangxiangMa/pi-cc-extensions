@@ -31,8 +31,8 @@ export interface DiffPalette {
 	removeEmphasisBgAnsi: string;
 }
 
-const ADD_ROW_BACKGROUND_MIX_RATIO = 0.12;
-const REMOVE_ROW_BACKGROUND_MIX_RATIO = 0.12;
+const ADD_ROW_BACKGROUND_MIX_RATIO = 0.35;
+const REMOVE_ROW_BACKGROUND_MIX_RATIO = 0.35;
 const ADD_INLINE_EMPHASIS_MIX_RATIO = 0.26;
 const REMOVE_INLINE_EMPHASIS_MIX_RATIO = 0.26;
 const ADDITION_TINT_TARGET: RgbColor = { r: 84, g: 190, b: 118 };
@@ -211,6 +211,23 @@ function mixRgb(base: RgbColor, tint: RgbColor, ratio: number): RgbColor {
 	};
 }
 
+/**
+ * Row/emphasis backgrounds are built by mixing a small tint into a "base"
+ * panel color pulled from theme tokens (toolSuccessBg/toolPendingBg/
+ * userMessageBg). Those tokens are not guaranteed to be hue-neutral — e.g.
+ * a theme can define toolSuccessBg as a fully saturated green (ansi-256 22).
+ * When that happens, the base's own hue dominates the mix (since the tint
+ * ratio is a minority weight) and both the add and remove rows collapse
+ * toward the same base hue, hiding the red/green diff signal entirely.
+ * Desaturating the base to its luminance-equivalent gray before mixing
+ * keeps its brightness/contrast but removes its hue bias, so the add/
+ * remove tints remain the dominant, visually distinct color signal.
+ */
+function toNeutralGray(color: RgbColor): RgbColor {
+	const luminance = color.r * 0.299 + color.g * 0.587 + color.b * 0.114;
+	return { r: luminance, g: luminance, b: luminance };
+}
+
 function extractThemeBackgroundAnsi(text: string): string | undefined {
 	if (!text || !text.includes("\x1b[")) {
 		return undefined;
@@ -263,9 +280,12 @@ export function readThemeAnsi(
 }
 
 export function resolveDiffPalette(theme: DiffTheme): DiffPalette {
-	const baseBg = parseAnsiColorCode(readThemeAnsi(theme, "bg", "toolSuccessBg")) ??
+	const rawBaseBg = parseAnsiColorCode(readThemeAnsi(theme, "bg", "toolSuccessBg")) ??
 		parseAnsiColorCode(readThemeAnsi(theme, "bg", "toolPendingBg")) ??
 		parseAnsiColorCode(readThemeAnsi(theme, "bg", "userMessageBg")) ?? { r: 32, g: 35, b: 42 };
+	// Strip the base token's own hue so it cannot bias both add/remove rows
+	// toward the same color (see toNeutralGray doc comment).
+	const baseBg = toNeutralGray(rawBaseBg);
 	const addFg = parseAnsiColorCode(readThemeAnsi(theme, "fg", "toolDiffAdded")) ?? {
 		r: 88,
 		g: 173,
