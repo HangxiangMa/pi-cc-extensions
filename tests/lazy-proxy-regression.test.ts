@@ -1162,12 +1162,16 @@ test("lazy-proxy tui: renderer replacement preserves fullscreen mouse ownership"
 		"back to regular stays reporting-free",
 	);
 
-	// 当前 fullscreen teardown 不能误关官方 mouse mode。
+	// 当前 fullscreen teardown 只关闭扩展补开的 motion，不误关官方 click mode。
 	renderer = createRenderer("fullscreen", [tool], terminal);
 	ui.widget.render();
 	const writesBeforeTeardown = writes.length;
 	installToolMouseInteraction({});
 	const teardownWrites = writes.slice(writesBeforeTeardown);
+	assert.ok(
+		teardownWrites.some((value) => value.includes("?1003l")),
+		"teardown disables extension motion",
+	);
 	assert.ok(
 		!teardownWrites.some((value) => value.includes("?1000l") || value.includes("?1006l")),
 		"teardown keeps official click reporting",

@@ -100,7 +100,6 @@ let toolMouseRenderPatchState: { active: boolean } | null = null;
 let toolMouseRawWrite: ((data: string) => unknown) | null = null;
 let toolMouseInstallationOwner: object | null = null;
 let fullscreenMotionTerminal: any = null;
-let ownsFullscreenMotion = false;
 let sessionRenderTimer: ReturnType<typeof setTimeout> | null = null;
 let latestInteractionFrame: InteractionFrame = { regions: [] };
 
@@ -246,17 +245,6 @@ function toggleToolAtMouseClick(tui: any, packet: SgrMousePacket): boolean {
 	return true;
 }
 
-function officialFullscreenHasAllMotion(): boolean {
-	const term = process.env.TERM?.toLowerCase() ?? "";
-	return !(
-		process.env.TMUX !== undefined ||
-		process.env.ZELLIJ !== undefined ||
-		process.env.STY !== undefined ||
-		term.startsWith("tmux") ||
-		term.startsWith("screen")
-	);
-}
-
 /**
  * hover 依赖 DECSET 1003。官方 fullscreen 在 multiplexer 下只开 1002，
  * 因此扩展需在每个实际 renderer 上补开（Symbol 经惰性 Proxy 落到当前实例）。
@@ -283,7 +271,6 @@ function ensureFullscreenToolMouseMotion(tui: any): void {
 		tui.terminal?.write?.(TOOL_MOUSE_MOTION_ENABLE);
 		tui[FULLSCREEN_MOTION_ENABLED] = true;
 		fullscreenMotionTerminal = tui.terminal;
-		ownsFullscreenMotion = !officialFullscreenHasAllMotion();
 	} catch {
 		// renderer 可能正在切换或终端已经关闭。
 	}
@@ -296,9 +283,11 @@ function releaseFullscreenToolMouseMotion(tui?: any): void {
 		// 惰性 Proxy 可能已经切到另一个 renderer。
 	}
 	const terminal = fullscreenMotionTerminal;
-	const shouldDisable = ownsFullscreenMotion;
+	// Extension always enables 1003/1006 as a pair. Disable them on teardown
+	// even when the terminal already had motion reporting enabled: otherwise
+	// plain Windows terminals retain the extension's mode after Pi exits.
+	const shouldDisable = terminal !== null;
 	fullscreenMotionTerminal = null;
-	ownsFullscreenMotion = false;
 	try {
 		if (shouldDisable) terminal?.write?.(TOOL_MOUSE_MOTION_DISABLE);
 	} catch {
@@ -961,6 +950,9 @@ export function scheduleSessionRender(refresh?: () => void): void {
 		patchToolMouseMotionAfterRender(tui);
 		refreshToolRendererComponents(tui);
 		refresh?.();
-		tui.requestRender(true);
+		// Restored session components are already mounted by Pi. A forced full
+		// redraw here replays long transcripts through terminal scrollback; a
+		// normal invalidating render is sufficient after refreshing components.
+		tui.requestRender();
 	}, 0);
 }
