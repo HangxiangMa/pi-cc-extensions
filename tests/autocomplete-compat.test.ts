@@ -44,19 +44,19 @@ const agents = [
 ];
 
 test("agent and session autocomplete compose with an FFF provider that claims @ prefixes", async () => {
-	const sessions = createSessionAutocompleteProvider(
-		fffProvider,
+	const agentsWithFiles = createAgentAutocompleteProvider(fffProvider, () => agents);
+	const provider = createSessionAutocompleteProvider(
+		agentsWithFiles,
 		async () => references as any,
 		"/repo",
 	);
-	const provider = createAgentAutocompleteProvider(sessions, () => agents);
 	const controller = new AbortController();
 	const result = await provider.getSuggestions(["@"], 0, 1, { signal: controller.signal });
 
 	assert.equal(result?.prefix, "@");
 	assert.deepEqual(
 		result?.items.map((item) => item.label),
-		["[SubAgent] Coder", "index.ts", "[Session] Previous work"],
+		["index.ts", "[SubAgent] Coder", "[Session] Previous work"],
 	);
 });
 
@@ -75,8 +75,8 @@ test("agent autocomplete shows model and thinking in the description only", asyn
 		signal: new AbortController().signal,
 	});
 
-	assert.equal(result?.items[0]?.label, "[SubAgent] coder");
-	assert.equal(result?.items[0]?.description, "deepseek/deepseek-v4-flash · max");
+	const agentItem = result?.items.find((item) => item.label === "[SubAgent] coder");
+	assert.equal(agentItem?.description, "deepseek/deepseek-v4-flash · max");
 });
 
 test("session autocomplete fuzzy-matches explicit session names only", async () => {
@@ -174,7 +174,7 @@ test("duplicate session names use stable ids", async () => {
 	);
 });
 
-test("session autocomplete caps sessions at three and interleaves files two-to-one", async () => {
+test("session autocomplete puts capped sessions after files", async () => {
 	const manyReferences = Array.from({ length: 5 }, (_, index) => ({
 		kind: "session",
 		referenceIds: [`session-${index}`],
@@ -211,13 +211,19 @@ test("session autocomplete caps sessions at three and interleaves files two-to-o
 
 	assert.equal(labels.length, 10);
 	assert.equal(labels.filter((label) => label.startsWith("[Session]")).length, 3);
-	assert.deepEqual(labels.slice(0, 6), [
+	assert.deepEqual(labels.slice(0, 7), [
 		"file-0.ts",
 		"file-1.ts",
-		"[Session] Session 4",
 		"file-2.ts",
 		"file-3.ts",
+		"file-4.ts",
+		"file-5.ts",
+		"file-6.ts",
+	]);
+	assert.deepEqual(labels.slice(7), [
+		"[Session] Session 4",
 		"[Session] Session 3",
+		"[Session] Session 2",
 	]);
 });
 

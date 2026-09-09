@@ -193,10 +193,13 @@ function filterSessions(
 	references: SessionReference[],
 	query: string,
 	currentCwd: string,
+	kind: SessionReference["kind"],
 ): AutocompleteItem[] {
 	if (query.startsWith("session:")) return [];
 
-	const ordered = orderSessionReferences(references, currentCwd);
+	const ordered = orderSessionReferences(references, currentCwd).filter(
+		(reference) => reference.kind === kind,
+	);
 	const nameCounts = new Map<string, number>();
 	for (const reference of ordered) {
 		const name = reference.info.name?.trim();
@@ -217,29 +220,17 @@ function filterSessions(
 	});
 }
 
-function isPathLikeQuery(query: string): boolean {
-	return /[\\/*?]/.test(query) || /\.[A-Za-z0-9_-]{1,12}$/.test(query);
-}
-
 function mergeSessionAndFileItems(
 	sessionItems: AutocompleteItem[],
+	subagentItems: AutocompleteItem[],
 	fileItems: AutocompleteItem[],
-	query: string,
 ): AutocompleteItem[] {
 	const sessions = sessionItems.slice(0, MAX_SESSION_SUGGESTIONS);
+	const subagents = subagentItems.slice(0, MAX_SESSION_SUGGESTIONS);
 	const files = fileItems.slice(0, MAX_FILE_SUGGESTIONS);
-	if (isPathLikeQuery(query)) return [...files, ...sessions];
-
-	const merged: AutocompleteItem[] = [];
-	let sessionIndex = 0;
-	let fileIndex = 0;
-	while (sessionIndex < sessions.length || fileIndex < files.length) {
-		for (let count = 0; count < 2 && fileIndex < files.length; count++) {
-			merged.push(files[fileIndex++]!);
-		}
-		if (sessionIndex < sessions.length) merged.push(sessions[sessionIndex++]!);
-	}
-	return merged;
+	// File references are the common path for `@` completion. Keep subagents
+	// next, and append low-frequency session references last.
+	return [...files, ...subagents, ...sessions];
 }
 
 function liveSubagentReferences(
@@ -311,9 +302,16 @@ export function createAutocompleteProvider(
 			]);
 			if (options.signal.aborted) return null;
 
-			const sessionItems = filterSessions(references, query, currentCwd);
-			const fileItems = baseSuggestions?.prefix === `@${query}` ? baseSuggestions.items : [];
-			const items = mergeSessionAndFileItems(sessionItems, fileItems, query);
+			const subagentItems = filterSessions(references, query, currentCwd, "subagent");
+			const sessionItems = filterSessions(references, query, currentCwd, "session");
+			const baseItems = baseSuggestions?.prefix === `@${query}` ? baseSuggestions.items : [];
+			const baseSubagentItems = baseItems.filter((item) => item.label.startsWith("[SubAgent]"));
+			const fileItems = baseItems.filter((item) => !item.label.startsWith("[SubAgent]"));
+			const items = mergeSessionAndFileItems(
+				sessionItems,
+				[...subagentItems, ...baseSubagentItems],
+				fileItems,
+			);
 			if (items.length === 0) return baseSuggestions;
 			return { prefix: `@${query}`, items };
 		},

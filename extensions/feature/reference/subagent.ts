@@ -104,7 +104,7 @@ export function createAgentAutocompleteProvider(
 				? baseSuggestions.items.filter((item) => !agentValues.has(item.value))
 				: [];
 			const seen = new Set<string>();
-			const items = [...agentItems, ...baseItems].filter((item) => {
+			const items = [...baseItems, ...agentItems].filter((item) => {
 				const key = `${item.value}\0${item.label}`;
 				if (seen.has(key)) return false;
 				seen.add(key);

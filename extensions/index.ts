@@ -31,7 +31,9 @@ export default function (pi: ExtensionAPI): void {
 
 	// features
 	if (config.enableContextCommand) context(pi);
-	if (config.enableSessionReference) sessionReference(pi);
+	// Compose agent autocomplete before session references so the final `@` list
+	// can keep files first, subagents next, and sessions last.
 	if (config.enableSubagentAutocomplete) agentAutocomplete(pi);
+	if (config.enableSessionReference) sessionReference(pi);
 	if (config.enableAgentSummary) agentSummary(pi);
 }
