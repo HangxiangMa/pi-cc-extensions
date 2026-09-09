@@ -999,13 +999,18 @@ function compactThinking(pi: ExtensionAPI) {
 		// refreshMountedTranscript 扫描挂载树重绘这些组件，恢复 compact 渲染、
 		// 持久化时长与工具调用显示。
 		refreshMountedTranscript(activeTui);
-		activeTui?.requestRender(true);
+		// Pi already rebuilds the restored transcript before session_start. A
+		// forced render here repaints the entire history a second time and can
+		// make terminal scrollback visibly jump from the first line to the last.
+		// Component refresh above invalidates the affected nodes; coalesce with
+		// the normal render instead of forcing a full redraw.
+		activeTui?.requestRender();
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
 		restoreDurationEntries(ctx.sessionManager.getBranch(), completedDurations);
 		refreshMountedTranscript(activeTui);
-		activeTui?.requestRender(true);
+		activeTui?.requestRender();
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
