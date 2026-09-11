@@ -42,6 +42,7 @@ const CANONICAL_LINE_PATTERN = /^([+\- ])(\s*\d+)\|(.*)$/;
 const HASHLINE_ANCHOR_LINE_PATTERN = /^([+\- ])(\s*\d+)#([A-Za-z0-9]+| {2}):(.*)$/;
 // Pi still emits space-separated numbered rows, unlike OMP's pipe-delimited format.
 const PI_LINE_PATTERN = /^([+\- ])(\s*\d+)\s(.*)$/;
+const PI_OMISSION_LINE_PATTERN = /^ {3,}\.\.\.$/;
 const HUNK_HEADER_PATTERN = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
 const MIN_LINE_NUMBER_WIDTH = 2;
 
@@ -223,6 +224,12 @@ export function parseDiff(diffText: string): ParsedDiff {
 			oldLineCursor = null;
 			newLineCursor = null;
 			lineNumberDelta = 0;
+		}
+
+		// Pi pads omitted context with a blank line number; it is not a source row.
+		if (!hasHunkHeader && PI_OMISSION_LINE_PATTERN.test(rawLine)) {
+			entries.push(createMetaEntry(rawLine, hunkIndex));
+			continue;
 		}
 
 		// Pi's headerless format is ambiguous with numeric source text in unified hunks.

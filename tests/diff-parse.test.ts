@@ -175,6 +175,102 @@ test("pi numbered rows preserve numeric source content, whitespace, and padding"
 	);
 });
 
+for (const [lineCount, omission] of [
+	[9, "   ..."],
+	[30, "    ..."],
+	[100, "     ..."],
+] as const) {
+	test(`pi omission markers are metadata with ${lineCount}-line number padding`, () => {
+		const before = Array.from({ length: lineCount }, (_, index) => `line-${index + 1}`);
+		const after = before.map((line, index) => (index === 1 ? "line-2 changed" : line));
+		const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
+		const parsed = parseDiff(diff);
+
+		assert.deepEqual(parsed.entries.at(-1), {
+			kind: "meta",
+			raw: omission,
+			hunkIndex: 1,
+		});
+		assert.equal(parsed.stats.context, 5, "omitted context is not an actual source row");
+	});
+}
+
+test("pi leading, intermediate, and trailing omissions stay out of source counts", () => {
+	const before = Array.from({ length: 40 }, (_, index) => `line-${index + 1}`);
+	const after = before.map((line, index) =>
+		index === 10 || index === 29 ? `${line} changed` : line,
+	);
+	const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
+	const parsed = parseDiff(diff);
+	const omissions = parsed.entries.filter((entry) => entry.kind === "meta");
+
+	assert.deepEqual(
+		omissions.map((entry) => entry.raw),
+		["    ...", "    ...", "    ..."],
+	);
+	assert.equal(parsed.entries[0], omissions[0]);
+	assert.equal(parsed.entries.at(-1), omissions[2]);
+	assert.deepEqual(parsed.stats, {
+		added: 2,
+		removed: 2,
+		context: 16,
+		hunks: 1,
+		files: 1,
+		lines: 23,
+	});
+	assert.deepEqual(
+		lineEntries(diff)
+			.filter((line) => line.lineKind === "context")
+			.map(({ oldLineNumber, newLineNumber }) => [oldLineNumber, newLineNumber]),
+		[
+			[7, 7],
+			[8, 8],
+			[9, 9],
+			[10, 10],
+			[12, 12],
+			[13, 13],
+			[14, 14],
+			[15, 15],
+			[26, 26],
+			[27, 27],
+			[28, 28],
+			[29, 29],
+			[31, 31],
+			[32, 32],
+			[33, 33],
+			[34, 34],
+		],
+	);
+});
+
+for (const format of ["pi", "unified"] as const) {
+	test(`${format} literal ellipsis source rows retain their numbers and indentation`, () => {
+		const before = "before\n...\n   ...\nafter";
+		const after = "BEFORE\n...\n   ...\nafter";
+		const diff =
+			format === "pi"
+				? generateDiffString(before, after).diff
+				: "@@ -1,4 +1,4 @@\n-before\n+BEFORE\n ...\n    ...\n after";
+		const parsed = parseDiff(diff);
+
+		assert.equal(parsed.stats.context, 3);
+		assert.ok(parsed.entries.every((entry) => entry.kind !== "meta"));
+		assert.deepEqual(
+			lineEntries(diff)
+				.filter((line) => line.content.trim() === "...")
+				.map(({ oldLineNumber, newLineNumber, content }) => [
+					oldLineNumber,
+					newLineNumber,
+					content,
+				]),
+			[
+				[2, 2, "..."],
+				[3, 3, "   ..."],
+			],
+		);
+	});
+}
+
 for (const header of ["", "@@ -1,3 +1,3 @@\n"]) {
 	test(`hashline anchors remain available ${header ? "with" : "without"} hunk headers`, () => {
 		const lines = lineEntries(`${header} 1#AB:alpha\n-2#CD:beta\n+2#  :BETA\n 3#EF:gamma`);
