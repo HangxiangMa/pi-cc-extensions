@@ -3,9 +3,14 @@ import test from "node:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	ToolExecutionComponent,
+	generateDiffString,
+	initTheme,
+} from "@earendil-works/pi-coding-agent";
 import { shouldRenderRichDiff } from "../extensions/renderer/index.ts";
 import { config } from "../extensions/config/config.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
@@ -82,6 +87,36 @@ test("edit rich diff is width-safe and honors collapsed/expanded limits", () => 
 	);
 	assert.ok(output(expanded, 32).length > collapsedLines.length);
 });
+
+for (const [diffViewMode, width] of [
+	["unified", 80],
+	["split", 140],
+] as const) {
+	test(`pi omission markers render without invented gutters in ${diffViewMode} mode`, () => {
+		const before = Array.from({ length: 30 }, (_, index) => `line-${index + 1}`);
+		const after = before.map((line, index) => (index === 1 ? "line-2 changed" : line));
+		const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
+		const component = renderEditDiffResult(
+			{ diff },
+			{ expanded: true, filePath: "sample.txt" },
+			{ ...DEFAULT_TOOL_DISPLAY_CONFIG, diffViewMode, diffIndicatorMode: "classic" },
+			theme,
+			"",
+		);
+		const rows = output(component, width).map(stripVTControlCharacters);
+		const omissions = rows.filter((row) => row.includes("..."));
+
+		assert.deepEqual(
+			omissions.map((row) => row.trim()),
+			["..."],
+		);
+		assert.ok(
+			rows.some((row) => /\b6\s*│\s+line-6/.test(row)),
+			"source rows retain gutters",
+		);
+		assert.ok(rows.every((row) => visibleWidth(row) <= width));
+	});
+}
 
 test("edit/write collapsed diff hints switch from muted to white text on hover", () => {
 	let hovered = false;
