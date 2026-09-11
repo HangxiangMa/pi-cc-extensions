@@ -40,6 +40,8 @@ export interface DiffStats {
 
 const CANONICAL_LINE_PATTERN = /^([+\- ])(\s*\d+)\|(.*)$/;
 const HASHLINE_ANCHOR_LINE_PATTERN = /^([+\- ])(\s*\d+)#([A-Za-z0-9]+| {2}):(.*)$/;
+// Pi still emits space-separated numbered rows, unlike OMP's pipe-delimited format.
+const PI_LINE_PATTERN = /^([+\- ])(\s*\d+)\s(.*)$/;
 const HUNK_HEADER_PATTERN = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
 const MIN_LINE_NUMBER_WIDTH = 2;
 
@@ -62,7 +64,10 @@ function toParsedDiffLine(
 	return { lineKind: "context", lineNumber: normalizedLineNumber, content };
 }
 
-function parseCanonicalDiffLine(line: string): {
+function parseCanonicalDiffLine(
+	line: string,
+	allowPiFormat: boolean,
+): {
 	lineKind: DiffLineKind;
 	lineNumber: string;
 	content: string;
@@ -80,7 +85,8 @@ function parseCanonicalDiffLine(line: string): {
 		};
 	}
 
-	const match = line.match(CANONICAL_LINE_PATTERN);
+	const match =
+		line.match(CANONICAL_LINE_PATTERN) ?? (allowPiFormat ? line.match(PI_LINE_PATTERN) : null);
 	return match ? toParsedDiffLine(match[1] ?? " ", match[2] ?? "", match[3] ?? "") : null;
 }
 
@@ -187,12 +193,14 @@ export function parseDiff(diffText: string): ParsedDiff {
 	let oldLineCursor: number | null = null;
 	let newLineCursor: number | null = null;
 	let lineNumberDelta = 0;
+	let hasHunkHeader = false;
 
 	for (const rawLine of diffText.replace(/\r/g, "").split("\n")) {
 		stats.lines++;
 
 		const hunkMatch = rawLine.match(HUNK_HEADER_PATTERN);
 		if (hunkMatch) {
+			hasHunkHeader = true;
 			hunkIndex++;
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
 			oldLineCursor = toNumber(hunkMatch[1]);
@@ -217,7 +225,8 @@ export function parseDiff(diffText: string): ParsedDiff {
 			lineNumberDelta = 0;
 		}
 
-		const canonical = parseCanonicalDiffLine(rawLine);
+		// Pi's headerless format is ambiguous with numeric source text in unified hunks.
+		const canonical = parseCanonicalDiffLine(rawLine, !hasHunkHeader);
 		if (canonical) {
 			hunkIndex = ensureImplicitHunk(hunkIndex);
 			stats.hunks = Math.max(stats.hunks, hunkIndex);
