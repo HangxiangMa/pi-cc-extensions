@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Markdown } from "@earendil-works/pi-tui";
 import { render as renderMermaid, sourceBox } from "grok-mermaid";
 
 // ============================================================================
@@ -186,10 +187,50 @@ function normalizeMultilineLinks(markdown: string): string {
 }
 
 // ============================================================================
+// 终端代码块渲染
+// ============================================================================
+
+const CODE_BLOCK_RENDER_PATCH = Symbol.for("pi-cc-extensions.markdown.code-block-render");
+
+type MarkdownPrototype = typeof Markdown.prototype & Record<symbol, boolean | undefined>;
+
+/**
+ * Pi's Markdown component deliberately prints fenced-code delimiters as part of
+ * its default terminal presentation. That is useful for plain output, but it
+ * makes every assistant snippet look like raw Markdown and also leaves Mermaid
+ * fallback/source blocks visually wrapped in fences.
+ *
+ * Keep Markdown's parser and syntax highlighter, but suppress only the two
+ * decorative fence rows. Do this at render time instead of rewriting Markdown
+ * source, so Mermaid transformers still receive real fenced blocks and code
+ * indentation/highlighting remain intact.
+ */
+function installCodeBlockRendering(): void {
+	const prototype = Markdown.prototype as MarkdownPrototype;
+	if (prototype[CODE_BLOCK_RENDER_PATCH]) return;
+
+	const originalRender = prototype.render;
+	prototype.render = function patchedRender(width: number): string[] {
+		const self = this as unknown as {
+			theme: { codeBlockBorder: (text: string) => string };
+		};
+		const originalBorder = self.theme.codeBlockBorder;
+		self.theme.codeBlockBorder = () => "";
+		try {
+			return originalRender.call(this, width);
+		} finally {
+			self.theme.codeBlockBorder = originalBorder;
+		}
+	};
+	prototype[CODE_BLOCK_RENDER_PATCH] = true;
+}
+
+// ============================================================================
 // 注册
 // ============================================================================
 
 export default function (pi: ExtensionAPI): void {
+	installCodeBlockRendering();
 	// 注意：pi 每个扩展只有一个 markdownTransformer 槽位，多次注册会互相覆盖，
 	// 所以三个转换合并为一次注册，内部按序链式执行。
 	pi.registerMarkdownTransformer((markdown, context) => {

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
+import { Markdown } from "@earendil-works/pi-tui";
 import { default as enhance } from "../extensions/renderer/markdown-enhance.ts";
 
 const transformers: Array<(md: string, ctx?: object) => string> = [];
@@ -10,6 +11,29 @@ const run = (
 	md: string,
 	ctx = { messageType: "assistant", isStreaming: false, availableWidth: 100 },
 ) => transformers.reduce((acc, fn) => fn(acc, ctx), md);
+
+test("代码块隐藏 Markdown 围栏但保留代码内容", () => {
+	const identity = (text: string) => text;
+	const markdown = new Markdown("```js\nconst answer = 42;\n```", 0, 0, {
+		heading: identity,
+		link: identity,
+		linkUrl: identity,
+		code: identity,
+		codeBlock: identity,
+		codeBlockBorder: identity,
+		quote: identity,
+		quoteBorder: identity,
+		hr: identity,
+		listBullet: identity,
+		bold: identity,
+		italic: identity,
+		strikethrough: identity,
+		underline: identity,
+	});
+	const rendered = markdown.render(80).join("\\n");
+	assert.ok(rendered.includes("const answer = 42;"), rendered);
+	assert.ok(!rendered.includes("```"), rendered);
+});
 
 test("mermaid 方言渲染", () => {
 	assert.ok(run("```sequenceDiagram\nA->>B: hi\n```").includes("┌"));
