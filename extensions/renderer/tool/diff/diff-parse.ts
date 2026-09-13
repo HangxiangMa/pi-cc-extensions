@@ -2,7 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { fitToWidth } from "./diff-text.ts";
 
 export type DiffLineKind = "add" | "remove" | "context";
-export type DiffEntryKind = "line" | "meta" | "hunk" | "file";
+export type DiffEntryKind = "line" | "omission" | "meta" | "hunk" | "file";
 
 export interface DiffLineEntry {
 	kind: "line";
@@ -16,13 +16,19 @@ export interface DiffLineEntry {
 	hunkIndex: number;
 }
 
-export interface DiffMetaEntry {
-	kind: Exclude<DiffEntryKind, "line">;
+export interface DiffOmissionEntry {
+	kind: "omission";
 	raw: string;
 	hunkIndex: number;
 }
 
-export type ParsedDiffEntry = DiffLineEntry | DiffMetaEntry;
+export interface DiffMetaEntry {
+	kind: Exclude<DiffEntryKind, "line" | "omission">;
+	raw: string;
+	hunkIndex: number;
+}
+
+export type ParsedDiffEntry = DiffLineEntry | DiffOmissionEntry | DiffMetaEntry;
 
 export interface ParsedDiff {
 	entries: ParsedDiffEntry[];
@@ -163,6 +169,14 @@ function pushParsedLineEntry(
 	});
 }
 
+function createOmissionEntry(raw: string, hunkIndex: number): DiffOmissionEntry {
+	return {
+		kind: "omission",
+		raw,
+		hunkIndex,
+	};
+}
+
 function createMetaEntry(raw: string, hunkIndex: number): DiffMetaEntry {
 	return {
 		kind: classifyMetaLine(raw),
@@ -228,7 +242,7 @@ export function parseDiff(diffText: string): ParsedDiff {
 
 		// Pi pads omitted context with a blank line number; it is not a source row.
 		if (!hasHunkHeader && PI_OMISSION_LINE_PATTERN.test(rawLine)) {
-			entries.push(createMetaEntry(rawLine, hunkIndex));
+			entries.push(createOmissionEntry(rawLine, hunkIndex));
 			continue;
 		}
 

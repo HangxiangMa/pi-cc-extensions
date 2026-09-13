@@ -180,14 +180,14 @@ for (const [lineCount, omission] of [
 	[30, "    ..."],
 	[100, "     ..."],
 ] as const) {
-	test(`pi omission markers are metadata with ${lineCount}-line number padding`, () => {
+	test(`pi omission markers are semantic entries with ${lineCount}-line number padding`, () => {
 		const before = Array.from({ length: lineCount }, (_, index) => `line-${index + 1}`);
 		const after = before.map((line, index) => (index === 1 ? "line-2 changed" : line));
 		const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
 		const parsed = parseDiff(diff);
 
 		assert.deepEqual(parsed.entries.at(-1), {
-			kind: "meta",
+			kind: "omission",
 			raw: omission,
 			hunkIndex: 1,
 		});
@@ -202,7 +202,7 @@ test("pi leading, intermediate, and trailing omissions stay out of source counts
 	);
 	const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
 	const parsed = parseDiff(diff);
-	const omissions = parsed.entries.filter((entry) => entry.kind === "meta");
+	const omissions = parsed.entries.filter((entry) => entry.kind === "omission");
 
 	assert.deepEqual(
 		omissions.map((entry) => entry.raw),
@@ -254,7 +254,7 @@ for (const format of ["pi", "unified"] as const) {
 		const parsed = parseDiff(diff);
 
 		assert.equal(parsed.stats.context, 3);
-		assert.ok(parsed.entries.every((entry) => entry.kind !== "meta"));
+		assert.ok(parsed.entries.every((entry) => entry.kind !== "omission"));
 		assert.deepEqual(
 			lineEntries(diff)
 				.filter((line) => line.content.trim() === "...")
