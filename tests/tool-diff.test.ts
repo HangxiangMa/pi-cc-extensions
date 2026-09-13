@@ -88,35 +88,94 @@ test("edit rich diff is width-safe and honors collapsed/expanded limits", () => 
 	assert.ok(output(expanded, 32).length > collapsedLines.length);
 });
 
-for (const [diffViewMode, width] of [
-	["unified", 80],
-	["split", 140],
-] as const) {
-	test(`pi omission markers render without invented gutters in ${diffViewMode} mode`, () => {
-		const before = Array.from({ length: 30 }, (_, index) => `line-${index + 1}`);
-		const after = before.map((line, index) => (index === 1 ? "line-2 changed" : line));
-		const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
-		const component = renderEditDiffResult(
-			{ diff },
-			{ expanded: true, filePath: "sample.txt" },
-			{ ...DEFAULT_TOOL_DISPLAY_CONFIG, diffViewMode, diffIndicatorMode: "classic" },
-			theme,
-			"",
-		);
-		const rows = output(component, width).map(stripVTControlCharacters);
-		const omissions = rows.filter((row) => row.includes("..."));
+test("pi omissions use split number gutters and omit the terminal marker", () => {
+	const diff = [
+		"     ...",
+		"  67           src = ./.;",
+		"  68           # Non-vendored: go.mod/go.sum are the source of truth; a single",
+		"  69           # vendorHash covers the whole fetched dependency set. It changes only",
+		"  70           # when dependencies change.",
+		"- 71           vendorHash = pkgs.lib.fakeHash;",
+		'+ 71           vendorHash = "sha256-hf+aCbbDjGOHABCEvj2F7MbsZullpbdSqmkedd7sfIA=";',
+		"  72 ",
+		"  73           # CGO off -> a truly static binary on Linux. On Darwin, Go always links",
+		"  74           # libSystem (Apple ships no fully-static binaries), so the aarch64-darwin",
+		'  75           # artifact is self-contained except for libSystem. The "single static',
+		"     ...",
+	].join("\n");
+	const component = renderEditDiffResult(
+		{ diff },
+		{ expanded: true, filePath: "flake.nix" },
+		{ ...DEFAULT_TOOL_DISPLAY_CONFIG, diffViewMode: "split", diffIndicatorMode: "bars" },
+		theme,
+		"",
+	);
+	const rows = output(component, 180).map(stripVTControlCharacters);
+	const omissionRows = rows.filter((row) => row.includes("⋮"));
 
-		assert.deepEqual(
-			omissions.map((row) => row.trim()),
-			["..."],
-		);
-		assert.ok(
-			rows.some((row) => /\b6\s*│\s+line-6/.test(row)),
-			"source rows retain gutters",
-		);
-		assert.ok(rows.every((row) => visibleWidth(row) <= width));
-	});
-}
+	assert.equal(omissionRows.length, 1, "only the leading omission is useful");
+	assert.equal(omissionRows[0]?.match(/⋮/g)?.length, 2, "both number gutters show the omission");
+	assert.match(omissionRows[0] ?? "", /^\s*⋮\s*│\s*│\s*⋮\s*│/);
+	assert.ok(
+		rows.every((row) => !row.includes("...")),
+		"raw omission text is not source content",
+	);
+	assert.equal(
+		rows.findIndex((row) => /\b75\s*│/.test(row)),
+		rows.length - 1,
+		"the diff ends on the final real context row",
+	);
+	assert.ok(rows.every((row) => visibleWidth(row) <= 180));
+});
+
+test("pi omissions use the unified number gutter", () => {
+	const before = Array.from({ length: 30 }, (_, index) => `line-${index + 1}`);
+	const after = before.map((line, index) => (index === 10 ? `${line} changed` : line));
+	const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
+	const component = renderEditDiffResult(
+		{ diff },
+		{ expanded: true, filePath: "sample.txt" },
+		{ ...DEFAULT_TOOL_DISPLAY_CONFIG, diffViewMode: "unified", diffIndicatorMode: "bars" },
+		theme,
+		"",
+	);
+	const rows = output(component, 80).map(stripVTControlCharacters);
+	const omissionRows = rows.filter((row) => row.includes("⋮"));
+
+	assert.equal(omissionRows.length, 1, "the terminal omission is hidden");
+	assert.match(omissionRows[0] ?? "", /^\s*⋮\s*│/);
+	assert.ok(
+		rows.every((row) => !row.includes("...")),
+		"raw omission text is not rendered",
+	);
+});
+
+test("pi intermediate omissions retain split number gutters", () => {
+	const before = Array.from({ length: 40 }, (_, index) => `line-${index + 1}`);
+	const after = before.map((line, index) =>
+		index === 10 || index === 29 ? `${line} changed` : line,
+	);
+	const { diff } = generateDiffString(before.join("\n"), after.join("\n"));
+	const component = renderEditDiffResult(
+		{ diff },
+		{ expanded: true, filePath: "sample.txt" },
+		{ ...DEFAULT_TOOL_DISPLAY_CONFIG, diffViewMode: "split", diffIndicatorMode: "bars" },
+		theme,
+		"",
+	);
+	const rows = output(component, 140).map(stripVTControlCharacters);
+	const omissionRows = rows.filter((row) => row.includes("⋮"));
+
+	assert.equal(omissionRows.length, 2, "the leading and intermediate omissions remain visible");
+	assert.ok(
+		omissionRows.every((row) => row.match(/⋮/g)?.length === 2 && /^\s*⋮\s*│\s*│\s*⋮\s*│/.test(row)),
+		"each omission stays inside both line-number gutters",
+	);
+	assert.ok(
+		rows.every((row) => !row.includes("...")),
+		"the terminal raw marker is omitted",
+	);
+});
 
 test("edit/write collapsed diff hints switch from muted to white text on hover", () => {
 	let hovered = false;
