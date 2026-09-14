@@ -37,9 +37,10 @@ import {
 	isScrollbarColumnAt,
 } from "./layout.ts";
 import {
-	disableOfficialScrollToEnd,
 	fullscreenLazyTui,
 	hideScrollButton,
+	restoreOfficialScrollToEnd,
+	syncOfficialScrollToEnd,
 	isScrollBottomInput,
 	renderScrollButton,
 	resetScrollButtonState,
@@ -878,6 +879,7 @@ export function teardownToolMouseInteraction(
 	}
 	restoreToolMouseRenderPatch();
 	restoreFullscreenViewportInput(getToolMouseTui());
+	restoreOfficialScrollToEnd(getToolMouseTui());
 	resetScrollButtonState();
 	setToolMouseTui(null);
 	toolMouseUi = null;
@@ -893,6 +895,7 @@ export function resetToolHoverState(): void {
 	setHoveredCompactAssistant(null);
 	setScrollButtonVisible(false);
 	setScrollButtonHovered(false);
+	restoreOfficialScrollToEnd(getToolMouseTui());
 	releaseFullscreenToolMouseMotion(getToolMouseTui());
 }
 
@@ -917,12 +920,12 @@ export function installToolMouseInteraction(
 		if (isLazyProxyTui(tui)) {
 			patchFullscreenViewportInput(tui);
 			ensureFullscreenToolMouseMotion(tui);
-			disableOfficialScrollToEnd(tui);
+			syncOfficialScrollToEnd(tui);
 			setScrollButtonWidget({
 				render: (width: number) => {
 					patchFullscreenViewportInput(tui);
 					ensureFullscreenToolMouseMotion(tui);
-					disableOfficialScrollToEnd(tui);
+					syncOfficialScrollToEnd(tui);
 					return renderScrollButton(width, theme);
 				},
 				invalidate() {},
