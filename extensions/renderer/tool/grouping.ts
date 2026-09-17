@@ -155,7 +155,6 @@ function toolSummary(tool: any): ToolCallSummary {
 		cwd: tool?.cwd,
 	});
 }
-}
 
 function isMcpTool(tool: any): boolean {
 	return toolName(tool).toLowerCase() === "mcp";
