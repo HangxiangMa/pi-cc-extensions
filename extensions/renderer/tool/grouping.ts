@@ -10,7 +10,13 @@ import { TOOL_LOADING_INTERVAL_MS, toolLoadingIcon } from "../../utils/tool-load
 import { isToolTuiFullscreen, showMoreHintText } from "./show-more-hint.ts";
 import { stripAnsi, stripBackgroundAnsi, stripLeadingStatusIcon } from "../../utils/ansi-text.ts";
 import { walkComponentTree } from "../../utils/component-tree.ts";
-import { humanizeToolLabel, mcpToolDisplayName, toolCallSummary } from "./names.ts";
+import {
+	fitToolCallSummary,
+	humanizeToolLabel,
+	mcpToolDisplayName,
+	toolCallSummary,
+	type ToolCallSummary,
+} from "./names.ts";
 import {
 	patchRegistry,
 	TOOL_GROUPING_GENERATION_KEY as GENERATION_KEY,
@@ -142,9 +148,13 @@ export function paddedBackgroundRow(
 	return `${bgAnsi}${stable}\x1b[49m`;
 }
 
-function toolSummary(tool: any): { main: string; detail: string } {
+function toolSummary(tool: any): ToolCallSummary {
 	if (isDelegatingTool(tool)) return { main: mcpToolDisplayName(tool?.args), detail: "" };
-	return toolCallSummary(toolName(tool), tool?.args ?? {}, { variant: "grouping" });
+	return toolCallSummary(toolName(tool), tool?.args ?? {}, {
+		variant: "grouping",
+		cwd: tool?.cwd,
+	});
+}
 }
 
 function isMcpTool(tool: any): boolean {
@@ -352,11 +362,14 @@ export class ToolGroupComponent extends Container {
 			const continuation = index === total - 1 ? "  " : "│ ";
 			if (!this._expanded) {
 				const summary = toolSummary(tool);
+				const prefix = ` ${fg("dim", branch)} ${fg(color, statusIcon(toolStatus))} `;
+				const detail = fg("dim", summary.detail);
+				const mainWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(detail));
 				lines.push(
 					truncateToWidth(
-						` ${fg("dim", branch)} ${fg(color, statusIcon(toolStatus))} ${fg("toolTitle", summary.main)}${fg("dim", summary.detail)}`,
+						`${prefix}${fg("toolTitle", fitToolCallSummary(summary, mainWidth))}${detail}`,
 						width,
-						"…",
+						"",
 					),
 				);
 				continue;

@@ -16,6 +16,7 @@ import {
 	type DiffLineEntry,
 	type DiffLineKind,
 	type DiffMetaEntry,
+	type DiffOmissionEntry,
 	type ParsedDiffEntry,
 } from "./diff-parse.ts";
 import { getCellLineNumber, type DiffSpan, type SplitDiffRow } from "./diff-inline.ts";
@@ -26,6 +27,8 @@ export interface RenderedRow {
 	text: string;
 	hunkIndex: number | null;
 }
+
+type MaterializedDiffEntry = DiffLineEntry | DiffMetaEntry;
 
 interface LineCellRenderParams {
 	kind: DiffLineKind;
@@ -51,6 +54,7 @@ export interface DiffRenderContext {
 }
 
 const SPLIT_SEPARATOR = " │ ";
+const OMISSION_GLYPH = "⋮";
 const MIN_SPLIT_COLUMN_WIDTH = 24;
 
 function resolveIndicatorGlyph(
@@ -373,6 +377,29 @@ function renderLineCell(
 	);
 }
 
+// Reuse line-cell layout without treating omissions as parsed source lines.
+function createOmissionRenderLine(entry: DiffOmissionEntry, compact = false): DiffLineEntry {
+	return {
+		kind: "line",
+		lineKind: "context",
+		oldLineNumber: null,
+		newLineNumber: null,
+		fallbackLineNumber: compact ? "" : OMISSION_GLYPH,
+		content: compact ? OMISSION_GLYPH : "",
+		raw: entry.raw,
+		hunkIndex: entry.hunkIndex,
+	};
+}
+
+function materializeOmissionEntries(
+	entries: ParsedDiffEntry[],
+	compact = false,
+): MaterializedDiffEntry[] {
+	return entries.map((entry) =>
+		entry.kind === "omission" ? createOmissionRenderLine(entry, compact) : entry,
+	);
+}
+
 function pushDiffLineRows(rows: RenderedRow[], lines: string[], entry: DiffLineEntry): void {
 	rows.push(
 		...lines.map((text) => ({
@@ -383,7 +410,7 @@ function pushDiffLineRows(rows: RenderedRow[], lines: string[], entry: DiffLineE
 }
 
 function processDiffEntries(
-	entries: ParsedDiffEntry[],
+	entries: MaterializedDiffEntry[],
 	ctx: DiffRenderContext,
 	processLine: (entry: DiffLineEntry) => string[],
 ): RenderedRow[] {
@@ -404,7 +431,7 @@ export function renderUnified(
 	ctx: DiffRenderContext,
 	lineNumberWidth: number,
 ): RenderedRow[] {
-	return processDiffEntries(entries, ctx, (entry) => {
+	return processDiffEntries(materializeOmissionEntries(entries), ctx, (entry) => {
 		const lineNumber =
 			entry.lineKind === "add"
 				? formatLineNumberLabel(
@@ -459,6 +486,10 @@ function toUnifiedFallbackRows(
 ): RenderedRow[] {
 	const flattened: ParsedDiffEntry[] = [];
 	for (const row of rows) {
+		if (row.omission) {
+			flattened.push(row.omission);
+			continue;
+		}
 		if (row.meta) {
 			flattened.push(row.meta);
 			continue;
@@ -474,7 +505,7 @@ function toUnifiedFallbackRows(
 }
 
 export function renderCompact(entries: ParsedDiffEntry[], ctx: DiffRenderContext): RenderedRow[] {
-	return processDiffEntries(entries, ctx, (entry) => {
+	return processDiffEntries(materializeOmissionEntries(entries, true), ctx, (entry) => {
 		const codeText = normalizeCodeWhitespace(
 			getCompactLineRenderContent(entry, ctx.showHashlineAnchors),
 		);
@@ -695,8 +726,9 @@ export function renderSplit(
 			continue;
 		}
 
+		const omissionLine = row.omission ? createOmissionRenderLine(row.omission) : undefined;
 		const leftCells = renderSplitCell(
-			row.left,
+			omissionLine ?? row.left,
 			"left",
 			leftWidth,
 			splitLineNumberWidth,
@@ -710,7 +742,7 @@ export function renderSplit(
 			showHashlineAnchors,
 		);
 		const rightCells = renderSplitCell(
-			row.right,
+			omissionLine ?? row.right,
 			"right",
 			rightWidth,
 			splitLineNumberWidth,
