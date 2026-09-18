@@ -63,11 +63,21 @@ export function refreshMountedTranscript(tui?: unknown): void {
 	if (!tui || typeof (tui as any).getMountedRoots !== "function") return;
 	// 先修正链序再重绘：扫描触发 updateContent 时 compact-mode 已在外层。
 	assertCompactModeOutermost();
-	walkComponentTree(tui, (value: any) => {
-		try {
-			refreshTranscriptComponent(value);
-		} catch {
-			// 单个组件失败不阻断其余组件；后续 session_tree/重绘再试。
-		}
-	});
+	// Only ever called from resume/reload/compaction handlers (never live mode-switch) —
+	// mark the compact-mode patch so a trailing unclosed round renders as finished
+	// instead of arming a 250ms tick that no live turn will ever come to stop.
+	const patch = patchRegistry.get<{ staticRefresh?: boolean }>(COMPACT_MODE_PATCH_KEY);
+	const previousStaticRefresh = patch?.staticRefresh;
+	if (patch) patch.staticRefresh = true;
+	try {
+		walkComponentTree(tui, (value: any) => {
+			try {
+				refreshTranscriptComponent(value);
+			} catch {
+				// 单个组件失败不阻断其余组件；后续 session_tree/重绘再试。
+			}
+		});
+	} finally {
+		if (patch) patch.staticRefresh = previousStaticRefresh ?? false;
+	}
 }

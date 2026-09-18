@@ -453,8 +453,13 @@ export function isCompactAssistantComponent(value: unknown): boolean {
 }
 
 export type CompactModeHooks = {
-	/** 会话事件后同步：所有权、全局展开状态、已挂载组件。 */
-	sync(ctx: any): void;
+	/**
+	 * 会话事件后同步：所有权、全局展开状态、已挂载组件。
+	 * isReplay=true（resume/reload/session_tree/compaction）时：一个仍 hasToolCalls
+	 * 但没有收尾文本的尾部 round 按已结束渲染，不武装 250ms tick——没有真实 turn
+	 * 会来补上收尾文本。isReplay 默认 false，即 /ccstyle 切换这类真实活跃会话不受影响。
+	 */
+	sync(ctx: any, isReplay?: boolean): void;
 	/** 重绘所有被跟踪的 assistant/tool 组件（模式切换用）。 */
 	refresh(): void;
 	/** compact 模式下重新认领 assistant patch（位于 compact-thinking 之上）。 */
@@ -481,6 +486,8 @@ type CompactModePatch = {
 	toolOriginalUpdateDisplay: () => void;
 	assertAssistantOwnership: () => void;
 	dispose: () => void;
+	/** True while replaying resume/reload/compaction history (never a live turn or /ccstyle switch): a round still group-renders, but never arms the tick. */
+	staticRefresh: boolean;
 };
 
 const trackedAssistantComponents = new Set<any>();
@@ -796,6 +803,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		toolOriginalUpdateDisplay: toolPrototype.updateDisplay,
 		assertAssistantOwnership: () => {},
 		dispose: () => {},
+		staticRefresh: false,
 	};
 
 	const passThroughAssistant = (component: any, message: any, isStreaming?: boolean): any => {
@@ -1030,6 +1038,13 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	};
 
 	const activateRound = (round: CompactRound): void => {
+		// Static replay (resume/reload) has no live turn left to ever supply the closing
+		// text message, so a round that looks "still running" here is actually done —
+		// treat it as finished instead of leaving activeRound/the tick armed forever.
+		if (patch.staticRefresh) {
+			endRound(round);
+			return;
+		}
 		round.active = true;
 		if (!round.startedAt) round.startedAt = Date.now();
 		delete round.endedAt;
@@ -1244,7 +1259,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	};
 
 	return {
-		sync(ctx: any) {
+		sync(ctx: any, isReplay = false) {
 			if (!patch.active) return;
 			uiRef = ctx?.ui;
 			resetRounds();
@@ -1253,7 +1268,13 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 			patch.assertAssistantOwnership();
 			if (config.mode === "compact") syncGlobalExpanded(ctx);
 			else hoveredAssistantComponent = undefined;
-			refreshTrackedComponents();
+			const previousStaticRefresh = patch.staticRefresh;
+			if (isReplay) patch.staticRefresh = true;
+			try {
+				refreshTrackedComponents();
+			} finally {
+				patch.staticRefresh = previousStaticRefresh;
+			}
 		},
 		refresh() {
 			if (!patch.active) return;

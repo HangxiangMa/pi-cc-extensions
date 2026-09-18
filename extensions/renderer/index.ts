@@ -61,9 +61,10 @@ function refreshCurrentTranscript(ctx?: any, toolGrouping?: ToolGroupingHooks): 
 	ctx?.ui?.requestRender?.(true);
 }
 
-function syncCompactMode(ctx: any): void {
+/** isReplay: resume/reload/session_tree/compaction — never a live /ccstyle switch. */
+function syncCompactMode(ctx: any, isReplay = false): void {
 	refreshCompactModeComponents(getToolMouseTui());
-	compactModeHooks?.sync(ctx);
+	compactModeHooks?.sync(ctx, isReplay);
 }
 
 function applyStyleMode(mode: CompactStyleMode, ctx: any, toolGrouping?: ToolGroupingHooks): void {
@@ -215,10 +216,10 @@ export default function (
 		setMessageDisplayTheme(ctx.ui.theme);
 		ctx.ui.setStatus("ccstyle", undefined);
 		// 先收集 resume transcript，再同步 compact 补丁与全局展开状态。
-		syncCompactMode(ctx);
+		syncCompactMode(ctx, true);
 		// compact-thinking 的 session_start 处理在本 handler 之后执行（在其之上再装
 		// 一层 updateContent）；延迟再同步一次，保证 compact 补丁最终位于外层。
-		setTimeout(() => syncCompactMode(ctx), 0);
+		setTimeout(() => syncCompactMode(ctx, true), 0);
 		scheduleSessionRender(() => hooks.toolGrouping.refresh(getToolMouseTui()));
 	});
 
@@ -230,9 +231,9 @@ export default function (
 		if (!hooks) return;
 		hooks.toolGrouping.setTheme(ctx.ui.theme);
 		setMessageDisplayTheme(ctx.ui.theme);
-		syncCompactMode(ctx);
+		syncCompactMode(ctx, true);
 		scheduleSessionRender(() => {
-			syncCompactMode(ctx);
+			syncCompactMode(ctx, true);
 			hooks.toolGrouping.refresh(getToolMouseTui());
 		});
 	});
@@ -240,8 +241,8 @@ export default function (
 	pi.on("session_tree", async (event, ctx) => {
 		// 会话树重建后在当前帧和下一帧各同步一次，替换旧组件引用。
 		if (ctx?.mode !== "tui" || !ctx?.hasUI) return;
-		syncCompactMode(ctx);
-		scheduleSessionRender(() => syncCompactMode(ctx));
+		syncCompactMode(ctx, true);
+		scheduleSessionRender(() => syncCompactMode(ctx, true));
 	});
 
 	pi.on("tool_execution_start", async (_event, ctx) => {

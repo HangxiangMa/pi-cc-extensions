@@ -1134,3 +1134,34 @@ test("isStreaming survives the compact + compact-thinking patch chain (mermaid f
 		assistantPrototype.updateContent = originalUpdateContent;
 	}
 });
+
+test("resume replay of a trailing unclosed tool-call round never arms the redraw tick, live streaming still does", async () => {
+	const { hooks, restore } = installHooks();
+	try {
+		let renderCalls = 0;
+		hooks.sync({
+			ui: { requestRender: () => renderCalls++, getToolsExpanded: () => false },
+		} as any);
+
+		// Session ended right after a tool call, before the model's closing text reply.
+		// Constructed with no message, like pi rebuilds the tree with the original
+		// prototype pre-patch on resume; refreshMountedTranscript below is what drives
+		// it through the (now re-attached) compact-mode patch, as a real resume would.
+		const replayed = new AssistantMessageComponent(undefined, true) as any;
+		replayed.lastMessage = toolCallMessage(1);
+		const tui = { getMountedRoots: () => [replayed] } as any;
+		refreshMountedTranscript(tui);
+
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(renderCalls, 0, "static replay must not arm the 250ms round tick");
+
+		// A genuine live update (not a resume replay) must still tick while its round runs.
+		const live = new AssistantMessageComponent(toolCallMessage(2), true) as any;
+		live.updateContent(toolCallMessage(2));
+
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.ok(renderCalls > 0, "a live in-progress round must still arm the redraw tick");
+	} finally {
+		restore();
+	}
+});
