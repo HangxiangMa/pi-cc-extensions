@@ -113,7 +113,7 @@ export function installGitDiffCommand(pi: ExtensionAPI): void {
 			const loaded = await loadGitDiff(pi, ctx, safePathArg(args));
 			if (!loaded) return;
 			if (!loaded.text.trim()) {
-				ctx.ui.notify("Working tree is clean", "info");
+				ctx.ui.notify("No tracked changes", "info");
 				return;
 			}
 			const parsed = parseDiff(loaded.text);
