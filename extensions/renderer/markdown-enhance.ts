@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
+import { config } from "../config/config.ts";
 import { render as renderMermaid, sourceBox } from "grok-mermaid";
 
 // ============================================================================
@@ -211,6 +212,7 @@ function installCodeBlockRendering(): void {
 
 	const originalRender = prototype.render;
 	prototype.render = function patchedRender(width: number): string[] {
+		if (config.mode === "off") return originalRender.call(this, width);
 		const self = this as unknown as {
 			theme: { codeBlockBorder: (text: string) => string };
 		};
