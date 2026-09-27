@@ -46,7 +46,6 @@ Renderer snapshots for `on` / `compact` modes: [default](./docs/tool-render-exam
 {
   // style
   "mode": "on",                            // on / compact / off
-  "compactRunningDisplay": "summary",      // compact fold: summary = one summary line / live = watch the active thinking tail and the running tool
   "excludeRenderers": [],                  // tools keeping the native renderer; Agent always keeps its dedicated renderer
 
   // features

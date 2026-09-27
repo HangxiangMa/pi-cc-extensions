@@ -67,6 +67,12 @@ export type CompactThinkingQuery = {
 
 const EDIT_WRITE_TOOLS = new Set(["edit", "write"]);
 
+/**
+ * 回合收尾后延迟收拢的静默期（ms）。正文 token 往往先于 toolCall 到达，
+ * 立刻收拢会得到「先收再开」两次转场；静默期内被新回合接替则一并收拢。
+ */
+const FOLD_SETTLE_MS = 250;
+
 type CompactThinkingTheme = Pick<Theme, "fg" | "italic" | "bold">;
 
 /** 与 compact-thinking 主渲染器共用的静态文字样式。 */
@@ -1007,6 +1013,9 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		suppressedToolIds: Set<string>;
 		/** live 槽位内联渲染的工具 id；回合结束时随槽位一起交还外层。 */
 		liveSlotToolIds: Set<string>;
+		/** 收尾后的静默期截止时间戳；期间仍按围观态渲染，到点才收拢。 */
+		settleUntil?: number;
+		foldTimer?: ReturnType<typeof setTimeout>;
 		/** 回合挂钟起点，保证 Running 时长连续递增。 */
 		startedAt: number;
 		endedAt?: number;
@@ -1017,6 +1026,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	/** 用户显式点开的 round 内工具；强制折叠不压回这些 id。 */
 	const explicitRoundToolIds = new Set<string>();
 	const liveSlotToolIds = new Set<string>();
+	const pendingFoldRounds = new Set<CompactRound>();
 	let uiRef: { requestRender?: (force?: boolean) => void } | undefined;
 	let roundTickTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -1056,8 +1066,22 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		}, 250);
 	};
 
-	/** 结束回合活动态；可选立即重绘。 */
-	const endRound = (round: CompactRound, render = false): void => {
+	/** 围观中：活动回合，或收尾静默期还没走完的回合（槽位卡仍挂在屏幕上）。 */
+	const roundLive = (round: CompactRound): boolean =>
+		round.active || (round.settleUntil !== undefined && Date.now() < round.settleUntil);
+
+	const clearFoldTimer = (round: CompactRound): void => {
+		if (round.foldTimer !== undefined) {
+			clearTimeout(round.foldTimer);
+			round.foldTimer = undefined;
+		}
+		round.settleUntil = undefined;
+		pendingFoldRounds.delete(round);
+	};
+
+	/** 结束回合活动态；不做任何重绘。 */
+	const finalizeRound = (round: CompactRound): void => {
+		clearFoldTimer(round);
 		round.active = false;
 		if (round.endedAt === undefined) round.endedAt = Date.now();
 		if (activeRound === round) {
@@ -1065,7 +1089,36 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 			deps.query?.setCompactSummaryActive?.(false);
 			stopRoundTick();
 		}
-		if (render) renderRound(round);
+	};
+
+	/**
+	 * 结束回合活动态；render=true 时走静默期，延迟 FOLD_SETTLE_MS 再收拢。
+	 * 分组语义不受影响：activeRound 立即让位，新消息不会被并进已收尾的回合。
+	 */
+	const endRound = (round: CompactRound, render = false): void => {
+		if (!render || !round.active) {
+			finalizeRound(round);
+			if (render) renderRound(round);
+			return;
+		}
+		finalizeRound(round);
+		if (round.foldTimer !== undefined) return;
+		round.settleUntil = Date.now() + FOLD_SETTLE_MS;
+		pendingFoldRounds.add(round);
+		round.foldTimer = setTimeout(() => {
+			round.foldTimer = undefined;
+			round.settleUntil = undefined;
+			pendingFoldRounds.delete(round);
+			renderRound(round);
+		}, FOLD_SETTLE_MS);
+	};
+
+	/** 新回合接替时立即收掉还在静默期的回合，把两次转场并成一次。 */
+	const flushSettle = (): void => {
+		for (const round of [...pendingFoldRounds]) {
+			clearFoldTimer(round);
+			renderRound(round);
+		}
 	};
 
 	const renderAssistantWithoutThinking = (
@@ -1243,6 +1296,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		const stopStatus = roundStopStatus(messages);
 		if (stopStatus) endRound(round);
 		// Running 时每次 render 重算时长（含挂钟下限）；结束后固定。
+		// 静默期内回合已收尾，摘要行直接给 Ran for，只有槽位卡多留一拍。
 		const getSummary = () => summarize(roundMessages(round), round.active, round);
 		const summary = getSummary();
 		for (const id of round.suppressedToolIds) expandedRoundToolIds.delete(id);
@@ -1395,7 +1449,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 			return;
 		}
 
-		if (round.active && config.compactRunningDisplay === "live") {
+		if (roundLive(round)) {
 			// 围观态：单一槽位卡（活动思考预览 + 当前工具），回合结束自动收回。
 			renderRoundLive(round, stopStatus, getSummary);
 			return;
@@ -1415,6 +1469,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	};
 
 	const activateRound = (round: CompactRound): void => {
+		flushSettle();
 		round.active = true;
 		if (!round.startedAt) round.startedAt = Date.now();
 		delete round.endedAt;
@@ -1426,6 +1481,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	const finishRound = (round: CompactRound): void => endRound(round, true);
 
 	const resetRounds = (): void => {
+		for (const round of [...pendingFoldRounds]) clearFoldTimer(round);
 		activeRound = undefined;
 		roundByComponent = new WeakMap();
 		expandedRoundToolIds.clear();
