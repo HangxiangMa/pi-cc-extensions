@@ -23,6 +23,7 @@ import {
 	styleCompactThinkingText,
 } from "../extensions/renderer/compact-mode.ts";
 import { componentAtLocalRow } from "../extensions/renderer/mouse/layout.ts";
+import { setToolMouseTui } from "../extensions/renderer/mouse/scroll.ts";
 import { refreshMountedTranscript } from "../extensions/renderer/transcript-refresh.ts";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import {
@@ -408,9 +409,9 @@ test("consecutive tool-call messages accumulate into one round until the next vi
 		const cardLines = assistant1.render(80);
 		assert.match(renderText(assistant1).join("\n"), /495 earlier lines/);
 		assert.ok(cardLines.length < 30, "collapsed children cap long output inside the round card");
-		assert.equal(cardLines[0], "", "expanded round keeps the normal card spacer");
+		assert.equal(cardLines[0]?.trim(), "", "expanded round keeps a leading blank row");
 		assert.ok(
-			cardLines.slice(1).every((line: string) => visibleWidth(line) === 80),
+			cardLines.every((line: string) => line === "" || visibleWidth(line) === 80),
 			"expanded round is wrapped by one width-safe tool card",
 		);
 		assert.deepEqual([...new Set(backgroundSlots)], ["userMessageBg"]);
@@ -606,6 +607,318 @@ test("compact 整回合展开卡内工具可单击二次展开", () => {
 	} finally {
 		hooks.shutdown();
 		defaultMode.shutdown();
+		setMessageDisplayTheme(previousTheme);
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 展开卡：thinking 二次展开只多 1 行内卡 padding，工具卡不再叠内层底色", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-nested-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const previousTheme = getMessageDisplayTheme();
+	setMessageDisplayTheme({
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		bg: (_slot: string, text: string) => text,
+		getBgAnsi: () => "\x1b[48;2;40;40;60m",
+	} as any);
+	const writeMetadata = new WriteExecutionMetadataStore();
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "thinking", thinking: "plan-one\nplan-two" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const bash = tool("bash", "b1", { command: "one" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		bash.updateResult({ content: [{ type: "text", text: "line one\nline two" }], isError: false });
+		anchor.setExpanded(true);
+
+		const raw = () => anchor.render(120);
+		const plain = (lines: string[]) =>
+			lines.map((line) =>
+				line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""),
+			);
+		const blanksAbove = (lines: string[], needle: string) => {
+			const stripped = plain(lines);
+			const index = stripped.findIndex((line) => line.includes(needle));
+			assert.ok(index > 0, `缺少 ${needle}: ${stripped.join("\n")}`);
+			let count = 0;
+			for (let i = index - 1; i >= 0 && !stripped[i]?.trim(); i--) count++;
+			return count;
+		};
+
+		// 子工具卡不再包一层 card 背景：整卡只应出现外卡一种背景色。
+		const collapsed = raw();
+		const backgrounds = new Set(
+			collapsed.flatMap((line: string) => line.match(/48;2;\d+;\d+;\d+/g) ?? []),
+		);
+		assert.equal(backgrounds.size, 1, `子工具卡不应有第二层背景色: ${[...backgrounds].join(" ")}`);
+
+		const thinking = anchor.contentContainer.children
+			.flatMap((child: any) => (Array.isArray(child?.children) ? child.children : []))
+			.find((child: any) => typeof child?.setHintHovered === "function");
+		assert.ok(thinking, "展开卡应保留 thinking 块");
+		const collapsedBlanks = blanksAbove(collapsed, "Thought");
+
+		thinking.setExpanded(true);
+		// thinking 内卡的上 padding 自身占 1 行；不能再多出外卡/内卡叠出来的空行。
+		const expanded = raw();
+		assert.equal(
+			blanksAbove(expanded, "Thought") - collapsedBlanks,
+			1,
+			"thinking 二次展开只应多出内卡 1 行 padding",
+		);
+		// 内卡下 padding 之外，还要再留 1 行外卡空行，别贴着工具卡。
+		const toolRow = plain(expanded).findIndex((line) => line.includes("$ one"));
+		assert.ok(toolRow > 0, `缺少工具卡行: ${plain(expanded).join("\n")}`);
+		const bgOf = (line: string) =>
+			[...new Set(line.match(/48;2;\d+;\d+;\d+/g) ?? [])].sort().join(",");
+		assert.ok(!plain(expanded)[toolRow - 1]?.trim(), "thinking 与工具卡之间要有空行");
+		assert.notEqual(
+			bgOf(expanded[toolRow - 1] ?? ""),
+			bgOf(expanded[toolRow - 2] ?? ""),
+			"工具卡前的最后一行应是内卡下 padding，空行在其外",
+		);
+	} finally {
+		hooks.shutdown();
+		setMessageDisplayTheme(previousTheme);
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 展开卡：助手文本不进面板，工具卡保留底色", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-text-outside-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const previousTheme = getMessageDisplayTheme();
+	setMessageDisplayTheme({
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		bg: (_slot: string, text: string) => text,
+		getBgAnsi: () => "\x1b[48;2;40;40;60m",
+	} as any);
+	const writeMetadata = new WriteExecutionMetadataStore();
+	// default-mode 先装，compact 才能把它的 ccstyle 工具卡当作 toolOriginalRender。
+	const defaultMode = installDefaultMode(writeMetadata);
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "let me check the file" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const bash = tool("bash", "b1", { command: "one" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		bash.updateResult({ content: [{ type: "text", text: "line one\nline two" }], isError: false });
+		anchor.setExpanded(true);
+
+		const raw = anchor.render(120);
+		const strip = (line: string) =>
+			line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+		const textRow = raw.findIndex((line: string) => strip(line).includes("let me check the file"));
+		const toolRow = raw.findIndex((line: string) => strip(line).includes("Bash one"));
+		assert.ok(
+			textRow >= 0 && toolRow > textRow,
+			`文本应在工具卡之前: ${raw.map(strip).join("\n")}`,
+		);
+		assert.ok(!raw[textRow]!.includes("48;2;"), "助手文本不进面板，不应带卡片底色");
+		assert.ok(raw[toolRow]!.includes("48;2;"), "工具卡仍在面板内，保留卡片底色");
+		assert.equal(strip(raw[textRow + 1] ?? "").trim(), "", "助手文本与面板之间要有 1 行空行");
+		assert.ok(
+			!raw[textRow + 1]!.includes("48;2;"),
+			"文本与面板之间的空行是卡外空行，不能带面板底色",
+		);
+		assert.ok(raw[textRow + 2]!.includes("48;2;"), "面板顶部要保留 1 行内层 padding，和底部对称");
+	} finally {
+		hooks.shutdown();
+		defaultMode.shutdown();
+		setMessageDisplayTheme(previousTheme);
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 展开卡：助手文本排在 thinking 前面，不被思考块盖住", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-text-first-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const previousTheme = getMessageDisplayTheme();
+	setMessageDisplayTheme({
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		bg: (_slot: string, text: string) => text,
+	} as any);
+	const writeMetadata = new WriteExecutionMetadataStore();
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	try {
+		// 真实流：thinking 先于 text 到达，折叠态只看得到 text + 摘要行。
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "thinking", thinking: "plan the round" },
+				{ type: "text", text: "let me check the file" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const bash = tool("bash", "b1", { command: "one" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		bash.updateResult({ content: [{ type: "text", text: "line one" }], isError: false });
+		anchor.setExpanded(true);
+
+		const raw = anchor
+			.render(120)
+			.map((line: string) =>
+				line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""),
+			);
+		const textRow = raw.findIndex((line: string) => line.includes("let me check the file"));
+		const thinkRow = raw.findIndex((line: string) => line.includes("plan the round"));
+		assert.ok(textRow >= 0 && thinkRow >= 0, `缺文本或思考: ${raw.join("\n")}`);
+		assert.ok(textRow < thinkRow, "助手文本应排在 thinking 前面，展开后不被思考块盖住");
+	} finally {
+		hooks.shutdown();
+		setMessageDisplayTheme(previousTheme);
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 面板收起后还原展开前的视口位置", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-viewport-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const previousTheme = getMessageDisplayTheme();
+	setMessageDisplayTheme({
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		bg: (_slot: string, text: string) => text,
+	} as any);
+	const writeMetadata = new WriteExecutionMetadataStore();
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	const viewport = { scrollTop: 10, isFollowingEnd: false };
+	const scrollCalls: number[] = [];
+	let endCalls = 0;
+	setToolMouseTui({
+		getPrimaryScrollView: () => ({
+			get scrollTop() {
+				return viewport.scrollTop;
+			},
+			get isFollowingEnd() {
+				return viewport.isFollowingEnd;
+			},
+			scrollTo(next: number) {
+				viewport.scrollTop = next;
+				scrollCalls.push(next);
+			},
+			scrollToEnd() {
+				endCalls++;
+				viewport.isFollowingEnd = true;
+			},
+		}),
+	});
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } }],
+		};
+		const bash = tool("bash", "b1", { command: "one" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		bash.updateResult({ content: [{ type: "text", text: "ok" }], isError: false });
+
+		anchor.setExpanded(true);
+		// 展开后用户滚到别处：收起要回到展开前的偏移，不留在被撞高的位置。
+		viewport.scrollTop = 40;
+		anchor.setExpanded(false);
+		assert.deepEqual(scrollCalls, [10], "收起应回到展开前的滚动偏移");
+		assert.equal(viewport.scrollTop, 10);
+
+		// 展开前就在底部：收起交回官方 follow，而不是回到旧偏移。
+		viewport.scrollTop = 120;
+		viewport.isFollowingEnd = true;
+		anchor.setExpanded(true);
+		viewport.scrollTop = 200;
+		viewport.isFollowingEnd = false;
+		anchor.setExpanded(false);
+		assert.equal(endCalls, 1, "展开前跟随底部时收起应交回 follow");
+	} finally {
+		setToolMouseTui(null);
+		hooks.shutdown();
 		setMessageDisplayTheme(previousTheme);
 		config.mode = previousMode;
 		emit("session_shutdown", {}, ctx);

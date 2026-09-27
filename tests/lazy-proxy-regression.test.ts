@@ -857,6 +857,72 @@ test("lazy-proxy tui: fullscreen compact expanded round thinking hint expands in
 	}
 });
 
+test("lazy-proxy tui: fullscreen compact expanded round tool hint expands in place", () => {
+	const previousMode = config.mode;
+	const previousTheme = getMessageDisplayTheme();
+	config.mode = "compact";
+	setMessageDisplayTheme({ fg: (_color: string, text: string) => text } as any);
+	const compact = installCompactMode({ writeMetadata: new WriteExecutionMetadataStore() });
+	const message = {
+		role: "assistant",
+		timestamp: 1,
+		content: [{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "echo" } }],
+	};
+	const assistant = new AssistantMessageComponent(message as any, true) as any;
+	assistant.updateContent(message);
+	const bash = new ToolExecutionComponent(
+		"bash",
+		"b1",
+		{ command: "echo" },
+		{},
+		undefined,
+		{ theme: theme(), requestRender() {} } as any,
+		process.cwd(),
+	) as any;
+	bash.executionStarted = true;
+	bash.updateDisplay?.();
+	bash.updateResult({ content: [{ type: "text", text: "ok" }], isError: false });
+	const { terminal } = createTerminalFixture();
+	const renderer = new FullscreenRenderer(assistant, null, terminal);
+	const tui = createLazyProxy(() => renderer);
+	const ui = createUi(tui);
+	try {
+		installToolMouseInteraction(ui.ctx);
+		ui.widget.render();
+		assistant.setExpanded(true);
+		renderer.currentLayout = fullscreenLayout(assistant, null);
+		const rendered = assistant.render(80);
+		const hintRow = rendered.findIndex((line: string) => line.includes("to show more"));
+		const plain = (rendered[hintRow] ?? "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+		const hintCol = plain.indexOf("to show more") + 1;
+		assert.ok(hintRow >= 0 && hintCol > 0, `expected tool hint in round card, got: ${plain}`);
+
+		tui.handleViewportInput(`\x1b[<0;${hintCol};${hintRow + 1}M`);
+		assert.equal(bash.expanded, true, "tool hint click expands the tool in place");
+		assert.equal(assistant.expanded, true, "round stays open when a nested tool expands");
+
+		// 面板内非提示区（工具卡标题行）单击：收起整块面板。
+		renderer.currentLayout = fullscreenLayout(assistant, null);
+		const titleRow = assistant
+			.render(80)
+			.findIndex((line: string) => line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").includes("Bash"));
+		assert.ok(titleRow >= 0, "expanded tool keeps its title row");
+		tui.handleViewportInput(`\x1b[<0;4;${titleRow + 1}M`);
+		assert.equal(assistant.expanded, true, "press alone keeps the panel open");
+		tui.handleViewportInput(`\x1b[<0;4;${titleRow + 1}m`);
+		assert.equal(assistant.expanded, false, "click outside the hint collapses the whole panel");
+		assert.ok(
+			renderer.officialInputs.includes("\x1b[O"),
+			"collapse 后给官方发 FOCUS_OUT，清掉停在旧布局上的选区锚点",
+		);
+	} finally {
+		installToolMouseInteraction({});
+		compact.shutdown();
+		config.mode = previousMode;
+		setMessageDisplayTheme(previousTheme);
+	}
+});
+
 test("lazy-proxy tui: fullscreen hover uses scroll ancestor content width after reload", async () => {
 	const wrap = (label: string) => ({
 		render: (width: number) => (width === 80 ? [label] : [label, `${label}-2`]),

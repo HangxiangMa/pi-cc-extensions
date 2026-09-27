@@ -179,6 +179,8 @@ const COLLAPSE_CLICK_MOVE_TOLERANCE = 1;
 const COLLAPSE_CLICK_MAX_MS = 600;
 /** 扩展收起自有卡后，官方 click 可能对同一次点击再 toggle 内部工具卡，短暂吞掉。 */
 const SUPPRESS_OFFICIAL_CARD_CLICK_MS = 300;
+/** 官方 fullscreen 的焦点事件串：发给原 handler 可清掉选区锚点（见 tui-alt-screen）。 */
+const FULLSCREEN_FOCUS_OUT = "\x1b[O";
 
 let pendingCollapsePress: {
 	card: any;
@@ -238,14 +240,15 @@ function resolveCollapsePress(
 	tui: any,
 	packet: SgrMousePacket,
 	options: { skipOfficialCards: boolean },
-): void {
+): any {
 	const press = pendingCollapsePress;
 	pendingCollapsePress = null;
-	if (!press || packet.final !== "m") return;
-	if (Math.abs(packet.col - press.col) > COLLAPSE_CLICK_MOVE_TOLERANCE) return;
-	if (Math.abs(packet.row - press.row) > COLLAPSE_CLICK_MOVE_TOLERANCE) return;
-	if (Date.now() - press.at > COLLAPSE_CLICK_MAX_MS) return;
-	if (options.skipOfficialCards && press.component instanceof ToolExecutionComponent) return;
+	if (!press || packet.final !== "m") return undefined;
+	if (Math.abs(packet.col - press.col) > COLLAPSE_CLICK_MOVE_TOLERANCE) return undefined;
+	if (Math.abs(packet.row - press.row) > COLLAPSE_CLICK_MOVE_TOLERANCE) return undefined;
+	if (Date.now() - press.at > COLLAPSE_CLICK_MAX_MS) return undefined;
+	if (options.skipOfficialCards && press.component instanceof ToolExecutionComponent)
+		return undefined;
 	const card = press.card;
 	if (
 		(card instanceof ToolGroupComponent || isCompactAssistantComponent(card)) &&
@@ -255,6 +258,8 @@ function resolveCollapsePress(
 		suppressOfficialCardClickUntil = Date.now() + SUPPRESS_OFFICIAL_CARD_CLICK_MS;
 	}
 	collapseExpandedCard(tui, card);
+	// 返回收起的卡：调用方只对 compact 面板清官方选区。
+	return card;
 }
 
 function toggleToolAtMouseClick(tui: any, packet: SgrMousePacket): boolean {
@@ -390,7 +395,10 @@ function handleFullscreenToolClick(tui: any, packet: SgrMousePacket): boolean {
 	const target = componentAtLocalRow(hit.box.component, hit.localRow, contentWidth);
 	if (!target) return false;
 	const component = target.component;
-	const card = target.group ?? component;
+	// compact 展开面板内命中时 owner 是面板：收起对象与记账对象都归面板，
+	// 否则 skipOfficialCards 会把内部工具当成官方卡跳过。
+	const card = target.group ?? target.owner ?? component;
+	const pressComponent = target.owner ?? component;
 	// 回到底部按钮：按组件引用命中，不依赖渲染行缓存。
 	if (getScrollButtonVisible() && component === getScrollButtonWidget()) {
 		tui.scrollToBottom?.();
@@ -408,15 +416,24 @@ function handleFullscreenToolClick(tui: any, packet: SgrMousePacket): boolean {
 	if (!component.expanded) {
 		// collapsed 仅按钮文本可展开，不能把同一行正文/留白变成点击区。
 		const hint = collapsedHintHitbox(line);
-		if (!hint || packet.col < hint.startCol || packet.col > hint.endCol) return false;
-		if (!isCollapsedHintRow(component, line)) return false;
+		const onHint = Boolean(
+			hint &&
+				packet.col >= hint.startCol &&
+				packet.col <= hint.endCol &&
+				isCollapsedHintRow(component, line),
+		);
+		if (!onHint) {
+			// 面板内非提示区（工具卡标题/摘要行、thinking 预览正文）：单击收起整块面板。
+			if (target.owner) rememberCollapsePress(target.owner, target.owner, packet);
+			return false;
+		}
 		// single-expand：展开前收起其他已展开工具卡/group。
 		const others: any[] = [];
 		collectFullscreenToolCards(hit.box.component, others);
 		for (const other of others) {
 			if (other !== component && other.expanded) {
-				// 展开 round 内 thinking 时不要把外层 compact 卡收起。
-				if (isThinking && isCompactAssistantComponent(other)) continue;
+				// 展开 round 卡内 thinking/工具时，外层 compact 卡是它的容器，不能收起。
+				if ((isThinking || isTool) && isCompactAssistantComponent(other)) continue;
 				other.setExpanded(false);
 				other.invalidate?.();
 			}
@@ -447,17 +464,18 @@ function handleFullscreenToolClick(tui: any, packet: SgrMousePacket): boolean {
 		}
 		// 其余放行官方：选区、OSC8 链接与 click 合成都交给 renderer。
 		// 完整单击的收起：官方卡由 guard 处理，自有卡在松手时结算。
-		rememberCollapsePress(card, component, packet);
+		rememberCollapsePress(card, pressComponent, packet);
 		return false;
 	}
-	// 点击后清 hover 高亮。
+	// 点击后清 hover 高亮。只 invalidate 点中的组件（或它所在的 group），
+	// 不要动 owner 面板：面板 invalidate 会连带重跑 updateContent，重建 thinking 实例。
 	setHoveredToolCallId(null);
 	setHoveredToolGroup(null);
 	setHoveredThinking(null);
 	setHoveredMessageDisplay(null);
 	setHoveredToolIo(null, null);
 	setHoveredCompactAssistant(null);
-	card.invalidate?.();
+	(target.group ?? component).invalidate?.();
 	tui.requestRender?.();
 	return true;
 }
@@ -561,9 +579,21 @@ function patchFullscreenViewportInput(tui: any): void {
 			if (packets && tui.hasOverlay?.() && hasActiveTextPreview()) return undefined;
 			if (packets && !tui.hasOverlay?.()) {
 				for (const packet of packets) {
-					if (isSgrLeftRelease(packet))
-						resolveCollapsePress(tui, packet, { skipOfficialCards: true });
-					else if (!isSgrLeftPress(packet) && !isSgrIdleMotion(packet))
+					if (isSgrLeftRelease(packet)) {
+						// 只给 compact 面板清选区：自有面板收起会重排布局，官方选区锚点
+						// 还停在旧布局上，同一次 release 会结算出多行高亮。
+						if (
+							isCompactAssistantComponent(
+								resolveCollapsePress(tui, packet, { skipOfficialCards: true }),
+							)
+						) {
+							try {
+								Reflect.apply(original, this, [FULLSCREEN_FOCUS_OUT]);
+							} catch {
+								/* 老版本没有选区状态 */
+							}
+						}
+					} else if (!isSgrLeftPress(packet) && !isSgrIdleMotion(packet))
 						clearPendingCollapsePressOnMove(packet);
 					if (isSgrLeftPress(packet) && handleFullscreenToolClick(tui, packet)) {
 						return { consume: true };
