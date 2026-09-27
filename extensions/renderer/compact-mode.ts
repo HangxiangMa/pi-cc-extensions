@@ -322,12 +322,14 @@ function editWriteExpandedCard(theme: any): any {
 
 /** compact 展开卡：外卡片保持 userMessageBg 原色；内部 tool call card
  *  背景更深一层且只覆盖内容区（左右内缩、上下限首尾文本行），形成嵌套层次。
- *  hits：非工具子卡（thinking）的行区间，供展开后点击 hint。 */
+ *  hits：子卡的行区间与命中目标（thinking 命中自身，工具命中 tool 组件），
+ *  供展开后点击 hint。未开启 toolHits 时不映射工具，点击仍归外层卡。 */
 function layoutExpandedToolCard(
 	theme: any,
 	children: any[],
 	width: number,
 	paints?: string[][],
+	toolHits = false,
 ): { lines: string[]; hits: Array<{ child: any; start: number; end: number }> } {
 	const slot = "userMessageBg";
 	const toolBgAnsi = darkenBgAnsi(theme, slot);
@@ -382,7 +384,11 @@ function layoutExpandedToolCard(
 			lines.push(toolCardBgRow(theme, slot, toolBgAnsi, childLines[i], width));
 		}
 		lines.push(toolCardBgRow(theme, slot, toolBgAnsi, "", width));
+		// thinking 命中自身；工具在展开卡内需要能二次展开时才映射回 tool 组件。
 		if (isThinkingPreview(child)) hits.push({ child, start: rangeStart, end: lines.length });
+		else if (toolHits && child.__ccTool) {
+			hits.push({ child: child.__ccTool, start: rangeStart, end: lines.length });
+		}
 	}
 	lines.push(paddedBackgroundRow(theme, slot, "", width));
 	return { lines, hits };
@@ -391,6 +397,8 @@ function layoutExpandedToolCard(
 function compactRoundCard(
 	cardItems: Array<{ child?: any; tool?: any }>,
 	toolRender: (tool: any, width: number) => string[],
+	/** true 时卡内工具行归 tool 组件，可点击二次展开（整回合展开卡）。 */
+	toolHits = false,
 ): any {
 	const children: any[] = [];
 	for (const item of cardItems) {
@@ -399,6 +407,7 @@ function compactRoundCard(
 			const tool = item.tool;
 			children.push({
 				__ccToolCard: true,
+				__ccTool: tool,
 				render: (innerWidth: number) => toolRender(tool, innerWidth),
 				invalidate: () => tool.invalidate?.(),
 			});
@@ -429,7 +438,7 @@ function compactRoundCard(
 		) {
 			return paint;
 		}
-		const laid = layoutExpandedToolCard(theme, children, width, paints);
+		const laid = layoutExpandedToolCard(theme, children, width, paints, toolHits);
 		paint = {
 			width,
 			theme,
@@ -529,6 +538,16 @@ export function setHoveredCompactAssistant(component: any): boolean {
 	if (hoveredAssistantComponent === component) return false;
 	hoveredAssistantComponent = component;
 	return true;
+}
+
+/**
+ * 整回合展开卡内的工具被点击展开时调用：让 compact 的强制折叠放行这一个，
+ * 并把同一回合里其他展开的工具收回去（保持单开）。非 round 内工具是空操作。
+ */
+let roundToolExpansion: { markUserExpanded(tool: any): void } | undefined;
+
+export function markCompactRoundToolExpanded(tool: any): void {
+	roundToolExpansion?.markUserExpanded(tool);
 }
 
 function compactEditWriteLine(
@@ -968,6 +987,8 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	let activeRound: CompactRound | undefined;
 	let roundByComponent = new WeakMap<object, CompactRound>();
 	const expandedRoundToolIds = new Set<string>();
+	/** 用户显式点开的 round 内工具；强制折叠不压回这些 id。 */
+	const explicitRoundToolIds = new Set<string>();
 	let uiRef: { requestRender?: (force?: boolean) => void } | undefined;
 	let roundTickTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -1037,6 +1058,23 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		return result;
 	};
 
+	const markRoundToolUserExpanded = (tool: any): void => {
+		const id = String(tool?.toolCallId ?? "");
+		if (!id || !expandedRoundToolIds.has(id)) return;
+		for (const other of trackedToolComponents) {
+			const otherId = String(other?.toolCallId ?? "");
+			if (other === tool || !expandedRoundToolIds.has(otherId) || other.expanded !== true) continue;
+			explicitRoundToolIds.delete(otherId);
+			if (typeof other.setExpanded === "function") other.setExpanded(false);
+			else {
+				other.expanded = false;
+				other.updateDisplay?.();
+			}
+		}
+		explicitRoundToolIds.add(id);
+	};
+	roundToolExpansion = { markUserExpanded: markRoundToolUserExpanded };
+
 	const roundMessages = (round: CompactRound): any[] => [
 		...round.messages.values(),
 		...round.detachedMessages,
@@ -1061,6 +1099,10 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		const summary = getSummary();
 		for (const id of round.suppressedToolIds) expandedRoundToolIds.delete(id);
 		round.suppressedToolIds.clear();
+		// 回合收起（或本回合不在展开态）时忘掉用户的单开选择。
+		if (round.anchor.expanded !== true) {
+			for (const id of roundToolCallIds(round)) explicitRoundToolIds.delete(id);
+		}
 
 		for (const [component, message] of round.messages) {
 			component.lastMessage = message;
@@ -1136,12 +1178,14 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 				expandedRoundToolIds.add(id);
 				if (!placedToolIds.has(id)) placeTool(id);
 			}
-			// Round 展开只打开外层卡片。普通工具保持折叠，避免长输出递归撑满屏幕。
+			// Round 展开只打开外层卡片。普通工具保持折叠，避免长输出递归撑满屏幕；
+			// 用户单独点开的（explicitRoundToolIds）不压回去。
 			for (const tool of trackedToolComponents) {
 				if (
 					!ids.has(tool.toolCallId) ||
 					EDIT_WRITE_TOOLS.has(String(tool.toolName ?? "")) ||
-					tool.expanded !== true
+					tool.expanded !== true ||
+					explicitRoundToolIds.has(String(tool.toolCallId ?? ""))
 				) {
 					continue;
 				}
@@ -1152,8 +1196,11 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 				}
 			}
 			round.anchor.contentContainer.addChild(
-				compactRoundCard(cardItems, (tool, innerWidth) =>
-					patch.toolOriginalRender.call(tool, innerWidth),
+				compactRoundCard(
+					cardItems,
+					(tool, innerWidth) => patch.toolOriginalRender.call(tool, innerWidth),
+					// 整回合展开卡：卡内工具行归 tool 组件，可单击二次展开。
+					true,
 				),
 			);
 			// 展开卡内工具会显示 error，外层仍挂 abort/length，避免只藏在折叠工具里。
@@ -1189,6 +1236,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		activeRound = undefined;
 		roundByComponent = new WeakMap();
 		expandedRoundToolIds.clear();
+		explicitRoundToolIds.clear();
 		deps.query?.setCompactSummaryActive?.(false);
 		stopRoundTick();
 	};
@@ -1322,12 +1370,11 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	};
 
 	patch.toolInstalledUpdateDisplay = function (this: any) {
-		if (
-			patch.active &&
-			config.mode === "compact" &&
-			expandedRoundToolIds.has(String(this.toolCallId ?? ""))
-		) {
-			this.expanded = false;
+		const id = String(this.toolCallId ?? "");
+		if (patch.active && config.mode === "compact" && expandedRoundToolIds.has(id)) {
+			// 用户点开的保留展开；其余（含全局展开被收回的）继续强制折叠。
+			if (this.expanded !== true) explicitRoundToolIds.delete(id);
+			else if (!explicitRoundToolIds.has(id)) this.expanded = false;
 		}
 		const result = patch.toolOriginalUpdateDisplay.call(this);
 		if (!patch.active) return result;
@@ -1355,6 +1402,9 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	patch.dispose = () => {
 		if (!patch.active) return;
 		patch.active = false;
+		if (roundToolExpansion?.markUserExpanded === markRoundToolUserExpanded) {
+			roundToolExpansion = undefined;
+		}
 		if (assistantPrototype.updateContent === patch.assistantInstalled) {
 			assistantPrototype.updateContent = patch.assistantOriginal;
 		}

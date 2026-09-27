@@ -122,10 +122,10 @@ export function componentAtLocalRow(
 		return { component, row: localRow };
 	}
 	if (isCompactAssistantComponent(component)) {
-		// 折叠：整行摘要。展开：先命中内部 thinking hint，其余仍归外层卡片。
+		// 折叠：整行摘要。展开：先命中内部 thinking hint 与工具卡，其余仍归外层卡片。
 		if (component.expanded === true) {
 			const inner = nestedChildAtRow(component, localRow, width);
-			if (inner instanceof ThinkingPreviewBlock) {
+			if (inner instanceof ThinkingPreviewBlock || isToolExecutionComponent(inner)) {
 				return { component: inner, row: localRow };
 			}
 		}

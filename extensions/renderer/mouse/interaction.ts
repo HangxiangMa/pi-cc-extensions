@@ -7,7 +7,11 @@ import {
 	TOOL_MOUSE_OWNER_KEY,
 } from "../../utils/patch-keys.ts";
 import { ToolGroupComponent } from "../tool/grouping.ts";
-import { isCompactAssistantComponent, setHoveredCompactAssistant } from "../compact-mode.ts";
+import {
+	isCompactAssistantComponent,
+	markCompactRoundToolExpanded,
+	setHoveredCompactAssistant,
+} from "../compact-mode.ts";
 import { isMessageDisplayComponent } from "../tool/message-display.ts";
 import { config } from "../../config/config.ts";
 import { isLazyProxyTui } from "../../utils/fullscreen-detect.ts";
@@ -417,6 +421,8 @@ function handleFullscreenToolClick(tui: any, packet: SgrMousePacket): boolean {
 				other.invalidate?.();
 			}
 		}
+		// 展开 round 卡内工具时，让 compact 的强制折叠放行它（非 round 内工具为空操作）。
+		if (isTool) markCompactRoundToolExpanded(component);
 		component.setExpanded(true);
 		clearPendingCollapsePress();
 	} else {

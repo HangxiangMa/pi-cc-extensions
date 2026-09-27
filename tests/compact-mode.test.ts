@@ -13,13 +13,16 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { config, formatConfigStatus, normalizeConfig } from "../extensions/config/config.ts";
 import { installCompactThinking } from "../extensions/feature/compact-thinking.ts";
+import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import {
 	buildMessageSummary,
 	installCompactMode,
 	isCompactAssistantComponent,
+	markCompactRoundToolExpanded,
 	refreshCompactModeComponents,
 	styleCompactThinkingText,
 } from "../extensions/renderer/compact-mode.ts";
+import { componentAtLocalRow } from "../extensions/renderer/mouse/layout.ts";
 import { refreshMountedTranscript } from "../extensions/renderer/transcript-refresh.ts";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import {
@@ -513,6 +516,97 @@ test("expanded running round keeps thinking and tools in transcript order", () =
 		assert.ok(planTwo < needle, `thinking 2 must precede its tool, got: ${text}`);
 	} finally {
 		hooks.shutdown();
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 整回合展开卡内工具可单击二次展开", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-round-tool-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const previousTheme = getMessageDisplayTheme();
+	setMessageDisplayTheme({
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		bg: (_slot: string, text: string) => text,
+	} as any);
+	const writeMetadata = new WriteExecutionMetadataStore();
+	const defaultMode = installDefaultMode(writeMetadata);
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+				{ type: "toolCall", id: "b2", name: "bash", arguments: { command: "two" } },
+			],
+		};
+		const first = tool("bash", "b1", { command: "one" });
+		const second = tool("bash", "b2", { command: "two" });
+		for (const item of [first, second]) {
+			item.executionStarted = true;
+			item.updateDisplay?.();
+		}
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		const output = { content: [{ type: "text", text: "line one\nline two" }], isError: false };
+		first.updateResult(output);
+		second.updateResult(output);
+		anchor.setExpanded(true);
+
+		const plainLines = (): string[] =>
+			anchor
+				.render(120)
+				.map((line: string) =>
+					line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""),
+				);
+		// 渲染样式随 mode/主题变化，按命中结果定位工具行，不按提示文案。
+		const rows = plainLines();
+		const toolRows = rows
+			.map((_line, index) => index)
+			.filter((index) => componentAtLocalRow(anchor, index, 120)?.component === first);
+		assert.ok(toolRows.length > 0, `展开卡里应能命中工具行: ${rows.join("\n")}`);
+
+		// 未标记时仍被强制折叠压回（保持「回合展开不递归展开工具」的既有行为）。
+		first.setExpanded(true);
+		assert.equal(first.expanded, false, "未确认用户展开前仍强制折叠");
+
+		// 用户点开：放行，并在卡内渲染出输出。
+		markCompactRoundToolExpanded(first);
+		first.setExpanded(true);
+		assert.equal(first.expanded, true, "用户点开的 round 内工具应保持展开");
+		const expandedText = plainLines().join("\n");
+		assert.match(expandedText, /line one/, `展开后应看到输出: ${expandedText}`);
+
+		// 单开：展开第二个时第一个收回。
+		markCompactRoundToolExpanded(second);
+		second.setExpanded(true);
+		assert.equal(second.expanded, true);
+		assert.equal(first.expanded, false, "单开语义：其他 round 内工具应收起");
+
+		// 回合收起再展开后回到纯折叠态。
+		anchor.setExpanded(false);
+		anchor.setExpanded(true);
+		assert.equal(second.expanded, false, "回合重新展开后工具回到折叠");
+	} finally {
+		hooks.shutdown();
+		defaultMode.shutdown();
+		setMessageDisplayTheme(previousTheme);
 		config.mode = previousMode;
 		emit("session_shutdown", {}, ctx);
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
