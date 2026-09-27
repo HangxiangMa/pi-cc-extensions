@@ -114,6 +114,8 @@ function toolCallMessage(timestamp: number, name = "bash") {
 		content: [{ type: "toolCall", name, arguments: { command: "echo" } }],
 	} as unknown as AssistantMessage;
 }
+/** 等过回合收尾的静默期（FOLD_SETTLE_MS = 250ms）。 */
+const settleFold = () => new Promise((resolve) => setTimeout(resolve, 350));
 
 test("buildMessageSummary: duration first, read dedup by path, counts, first-seen order, edit/write excluded", () => {
 	const query = {
@@ -259,6 +261,40 @@ test("dim thinking text uses the dim token without mutating the theme", () => {
 		assert.equal(styleCompactThinkingText("hi", theme as any), "<dim>hi");
 	} finally {
 		config.dimThinkingText = previous;
+	}
+});
+
+test("Dim thinking text 开启时摘要行整行走 dim", () => {
+	const previousTheme = getMessageDisplayTheme();
+	const previousDim = config.dimThinkingText;
+	const previousMode = config.mode;
+	setMessageDisplayTheme({
+		fg: (color: string, text: string) => `<${color}>${text}`,
+	} as any);
+	// 每次调用独立装卸补丁：共用安装时，上一个组件的回合会被 refresh 抢回去。
+	const summaryOf = (dim: boolean) => {
+		config.mode = "compact";
+		config.dimThinkingText = dim;
+		const hooks = installCompactMode({ writeMetadata: new WriteExecutionMetadataStore() });
+		try {
+			const msg = toolCallMessage(1);
+			const assistant = new AssistantMessageComponent(msg, true) as any;
+			assistant.updateContent(msg);
+			return assistant.render(200).join("\n");
+		} finally {
+			hooks.shutdown();
+		}
+	};
+	try {
+		const muted = summaryOf(false);
+		assert.ok(muted.includes("<muted>, bash×1"), `关闭时工具计数走 muted: ${muted}`);
+		const dim = summaryOf(true);
+		assert.ok(dim.includes("<dim>, bash×1"), `开启时工具计数走 dim: ${dim}`);
+		assert.ok(!dim.includes("<muted>"), `开启时整行不该再有 muted: ${dim}`);
+	} finally {
+		config.dimThinkingText = previousDim;
+		config.mode = previousMode;
+		setMessageDisplayTheme(previousTheme);
 	}
 });
 
@@ -608,6 +644,308 @@ test("compact 整回合展开卡内工具可单击二次展开", () => {
 		hooks.shutdown();
 		defaultMode.shutdown();
 		setMessageDisplayTheme(previousTheme);
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 面板收起时，卡内被点开的工具一起收回", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-round-retract-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const writeMetadata = new WriteExecutionMetadataStore();
+	const defaultMode = installDefaultMode(writeMetadata);
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+				{ type: "toolCall", id: "b2", name: "bash", arguments: { command: "two" } },
+			],
+		};
+		const first = tool("bash", "b1", { command: "one" });
+		const second = tool("bash", "b2", { command: "two" });
+		for (const item of [first, second]) {
+			item.executionStarted = true;
+			item.updateDisplay?.();
+		}
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		const output = { content: [{ type: "text", text: "line one" }], isError: false };
+		first.updateResult(output);
+		second.updateResult(output);
+
+		// 回合先收尾，模拟用户回看历史：live 态的强制折叠不再兜底。
+		const finalMessage = {
+			role: "assistant",
+			timestamp: 9,
+			content: [{ type: "text", text: "done" }],
+		};
+		const final = new AssistantMessageComponent(finalMessage as any, true) as any;
+		final.updateContent(finalMessage);
+		await settleFold();
+
+		anchor.setExpanded(true);
+		markCompactRoundToolExpanded(first);
+		first.setExpanded(true);
+		assert.equal(first.expanded, true, "面板展开时用户点开的工具应保持展开");
+
+		// 面板收起（点面板内非提示区）：卡内工具必须一起收回，否则会单独渲染成一张卡。
+		anchor.setExpanded(false);
+		assert.equal(first.expanded, false, "面板收起时卡内工具应一起收回");
+		assert.deepEqual(renderText(first), [], "收回后工具不该单独成卡");
+		assert.match(renderText(anchor).join("\n"), /Ran for /, "面板收起后只剩摘要行");
+	} finally {
+		hooks.shutdown();
+		defaultMode.shutdown();
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact live: one thinking preview, one tool slot, folds after the settle window", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-live-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata: new WriteExecutionMetadataStore() });
+	try {
+		// anchor：思考已收尾（末块是 toolCall），工具开始跑。
+		const message1 = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "thinking", thinking: "plan-one" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "echo-one" } },
+			],
+		};
+		const bash = tool("bash", "b1", { command: "echo-one" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const assistant1 = new AssistantMessageComponent(message1 as any, true) as any;
+		assistant1.updateContent(message1);
+
+		let text = renderText(assistant1).join("\n");
+		assert.match(text, /Running\.\.\./);
+		assert.ok(text.includes("echo-one"), `槽位应显示运行中的工具: ${text}`);
+		assert.doesNotMatch(text, /plan-one/, `已收尾的思考不该占屏幕: ${text}`);
+		const slotLine = renderText(assistant1).find((line) => line.startsWith("↳"));
+		assert.ok(slotLine, `槽位卡首行应有 ↳ 标记: ${text}`);
+		assert.ok(!slotLine.startsWith("↳  "), `↳ 后只留一个空格: ${slotLine}`);
+		assert.ok(slotLine.includes("echo-one"), `槽位卡首行应是当前工具: ${slotLine}`);
+		assert.deepEqual(renderText(bash), [], "槽位接管的工具外层不再单独成行");
+
+		// 工具完成：槽位保留终态，等下一个工具接手，不出现「完成即消失」的闪动。
+		bash.updateResult({ content: [{ type: "text", text: "ok-one" }], isError: false });
+		text = renderText(assistant1).join("\n");
+		assert.ok(text.includes("echo-one"), `工具完成后槽位仍应保留: ${text}`);
+		assert.deepEqual(renderText(bash), [], "完成态仍由槽位接管");
+
+		// 第二个成员：思考已收尾 + 新工具；第三个成员：思考仍在长。
+		const message2 = {
+			role: "assistant",
+			timestamp: 2,
+			content: [
+				{ type: "thinking", thinking: "plan-two" },
+				{ type: "toolCall", id: "g1", name: "grep", arguments: { pattern: "needle" } },
+			],
+		};
+		const grep = tool("grep", "g1", { pattern: "needle" });
+		grep.updateDisplay?.();
+		const assistant2 = new AssistantMessageComponent(message2 as any, true) as any;
+		assistant2.updateContent(message2);
+		const message3 = {
+			role: "assistant",
+			timestamp: 3,
+			content: [{ type: "thinking", thinking: "plan-three" }],
+		};
+		const assistant3 = new AssistantMessageComponent(message3 as any, true) as any;
+		assistant3.updateContent(message3);
+
+		text = renderText(assistant1).join("\n");
+		assert.match(text, /plan-three/, `活动思考应预览: ${text}`);
+		assert.doesNotMatch(text, /plan-one|plan-two/, `只有活动思考预览，中间态不堆积: ${text}`);
+		assert.doesNotMatch(text, /needle/, `思考占槽位时工具让位，槽位只放一个块: ${text}`);
+		assert.deepEqual(renderText(assistant2), [], "成员本体不重复渲染");
+		assert.deepEqual(renderText(assistant3), [], "思考预览已移进槽位卡");
+
+		// 最终正文出现：静默期内槽位还在，不立刻抖一下。
+		const finalMessage = {
+			role: "assistant",
+			timestamp: 4,
+			content: [{ type: "text", text: "done-live" }],
+		};
+		const final = new AssistantMessageComponent(finalMessage as any, true) as any;
+		final.updateContent(finalMessage);
+		assert.match(renderText(assistant1).join("\n"), /plan-three/, "静默期内槽位保留");
+
+		// 静默期结束 → 整块收回收摘要行。
+		await settleFold();
+		const folded = renderText(assistant1).join("\n");
+		assert.match(folded, /Ran for /, `回合结束应收回收摘要行: ${folded}`);
+		assert.doesNotMatch(folded, /plan-three/, `回合结束后思考预览应回收: ${folded}`);
+		assert.doesNotMatch(folded, /echo-one/, "回合结束后工具槽位应回收");
+		assert.match(folded, /bash×1/);
+		assert.match(folded, /grep×1/);
+		assert.deepEqual(renderText(assistant3), []);
+	} finally {
+		hooks.shutdown();
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact live: a superseding round folds the previous one immediately", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-live-supersede-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata: new WriteExecutionMetadataStore() });
+	try {
+		const messageA = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "first-line\nlatest-a" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "echo-a" } },
+			],
+		};
+		const bashA = tool("bash", "b1", { command: "echo-a" });
+		bashA.executionStarted = true;
+		bashA.updateDisplay?.();
+		const roundA = new AssistantMessageComponent(messageA as any, true) as any;
+		roundA.updateContent(messageA);
+		const liveA = renderText(roundA);
+		// live 与折叠态同形：正文整段照原生渲染，摘要行在其后，槽位卡再挂在摘要行下。
+		assert.deepEqual(
+			liveA.slice(0, 2),
+			["first-line", "latest-a"],
+			`live 应显示完整正文: ${liveA}`,
+		);
+		assert.match(liveA[2] ?? "", /^Running\.\.\./, `摘要行排在正文之后: ${liveA}`);
+		assert.match(liveA[3] ?? "", /^↳ \S/, `槽位卡首行紧跟 ↳: ${liveA}`);
+		assert.ok(!(liveA[3] ?? "").startsWith("↳  "), `↳ 后只留一个空格: ${liveA[3]}`);
+
+		// 新 anchor 接替：旧回合立即收拢，不残留成第二张卡。
+		const messageB = {
+			role: "assistant",
+			timestamp: 2,
+			content: [
+				{ type: "text", text: "second-round" },
+				{ type: "toolCall", id: "g1", name: "grep", arguments: { pattern: "needle" } },
+			],
+		};
+		const grepB = tool("grep", "g1", { pattern: "needle" });
+		grepB.executionStarted = true;
+		grepB.updateDisplay?.();
+		const roundB = new AssistantMessageComponent(messageB as any, true) as any;
+		roundB.updateContent(messageB);
+
+		// 收尾只少槽位卡：正文与摘要行原地不动，摘要行只换时态。
+		const foldedA = renderText(roundA);
+		assert.deepEqual(
+			foldedA.slice(0, 2),
+			["first-line", "latest-a"],
+			`收尾后正文原地不动: ${foldedA}`,
+		);
+		assert.match(foldedA[2] ?? "", /^Ran for .*bash×1/, `摘要行原地换时态: ${foldedA}`);
+		assert.equal(foldedA.length, liveA.length - 1, `收尾只该少槽位卡: ${liveA} → ${foldedA}`);
+		assert.ok(renderText(roundB).join("\n").includes("needle"), "新回合槽位应可见");
+	} finally {
+		hooks.shutdown();
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact live: 槽位卡内不重复展开入口，摘要行自己的 hint 保留", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-live-hint-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata: new WriteExecutionMetadataStore() });
+	try {
+		const anchorMessage = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "看长思考" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "echo-a" } },
+			],
+		};
+		const bash = tool("bash", "b1", { command: "echo-a" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const anchor = new AssistantMessageComponent(anchorMessage as any, true) as any;
+		anchor.updateContent(anchorMessage);
+
+		// 长思考成员接手槽位：预览有隐藏行，卡里本来会带 ", click to show more"。
+		const memberMessage = {
+			role: "assistant",
+			timestamp: 2,
+			content: [{ type: "thinking", thinking: ["t1", "t2", "t3", "t4", "t5"].join("\n") }],
+		};
+		const member = new AssistantMessageComponent(memberMessage as any, true) as any;
+		member.updateContent(memberMessage);
+
+		const lines = renderText(anchor);
+		const slot = lines.find((line) => line.startsWith("↳"));
+		assert.ok(slot, `槽位卡应存在: ${lines}`);
+		assert.ok(slot.includes("more lines"), `槽位卡保留隐藏行计数: ${lines}`);
+		assert.ok(!slot.includes("click to show more"), `槽位卡不重复展开入口: ${slot}`);
+		assert.ok(
+			lines.some((line) => !line.startsWith("↳") && line.includes("click to show more")),
+			`摘要行仍带自己的入口: ${lines}`,
+		);
+	} finally {
+		hooks.shutdown();
 		config.mode = previousMode;
 		emit("session_shutdown", {}, ctx);
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
