@@ -2,7 +2,7 @@
 
 > 由真实 renderer 驱动生成的示例快照，已剥离 ANSI。
 > 实际 TUI 中包含状态色、背景色和 hover 高亮；Braille loading 帧会随时间变化。
-> 当前版本：ccstyle 0.9.4 · mode=`compact`。
+> 当前版本：ccstyle 0.9.5 · mode=`compact`。
 > renderer 变更后请运行 `npm run docs:tool-render` 同步本文件。
 
 ## 1. 消息折叠摘要行
@@ -13,16 +13,18 @@
  Running... · 9s, bash×1, read×2, grep×1 • click to show more
 ```
 
-展开（Ctrl+O / 点击摘要行）后恢复原生渲染：
+展开（Ctrl+O / 点击摘要行）后助手文本按原生渲染，thinking 与工具卡装进 userMessageBg 面板：
 
 ```text
-   $ npm test
-
-   pass 79/79
-
-   read a.ts
+ checking the diff
 
   Thinking...
+
+  ✓ Bash npm test
+    ↳ 1 line returned • click to show more
+
+  ✓ Read a.ts
+    ↳ 2 lines loaded • click to show more
 ```
 
 - 进行中：`Running... · <时长>`；结束后：`Ran for <时长>`。
@@ -32,7 +34,7 @@
 - Agent/Task 调用只进摘要；tool 卡始终折叠。底部面板走独立 widget。
 - abort/error/length 状态行挂在摘要外层，不被折叠吞掉。
 - 行末 `click to show more`；摘要永不换行。
-- 展开后：摘要行隐藏，thinking 与工具卡恢复原生渲染，子卡片背景更深且带内部 padding。
+- 展开后：摘要行隐藏，助手文本按原生渲染（不进面板），thinking 与工具卡进面板；展开的 thinking 再套一层更深的内卡，工具卡只用外卡底色。
 
 纯函数口径（`buildMessageSummary`）：
 

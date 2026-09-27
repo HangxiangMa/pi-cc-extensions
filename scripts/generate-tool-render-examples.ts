@@ -557,12 +557,13 @@ async function generateCompact() {
 				content: [{ type: "text", text: "done" }],
 			} as unknown as AssistantMessage);
 
-			// 展开预览：setExpanded(true) 后恢复原生渲染（摘要行 + Thinking + 工具卡）。
+			// 展开预览：setExpanded(true) 后助手文本原生渲染，thinking 与工具卡进面板。
 			const expandMsg = {
 				role: "assistant",
 				timestamp: 3,
 				content: [
-					{ type: "thinking", thinking: "check" },
+					{ type: "thinking", thinking: "check the diff first" },
+					{ type: "text", text: "checking the diff" },
 					{ type: "toolCall", id: "x1", name: "bash", arguments: { command: "npm test" } },
 					{ type: "toolCall", id: "x2", name: "read", arguments: { path: "a.ts" } },
 				],
@@ -588,7 +589,7 @@ async function generateCompact() {
 					[
 						"含 toolCall 的 assistant 折叠为单行摘要（运行时长 + 工具计数）：",
 						fence([...activeLines, ...doneLines]),
-						"展开（Ctrl+O / 点击摘要行）后恢复原生渲染：",
+						"展开（Ctrl+O / 点击摘要行）后助手文本按原生渲染，thinking 与工具卡装进 userMessageBg 面板：",
 						fence(expandedLines),
 						[
 							"- 进行中：`Running... · <时长>`；结束后：`Ran for <时长>`。",
@@ -598,7 +599,7 @@ async function generateCompact() {
 							"- Agent/Task 调用只进摘要；tool 卡始终折叠。底部面板走独立 widget。",
 							"- abort/error/length 状态行挂在摘要外层，不被折叠吞掉。",
 							"- 行末 `click to show more`；摘要永不换行。",
-							"- 展开后：摘要行隐藏，thinking 与工具卡恢复原生渲染，子卡片背景更深且带内部 padding。",
+							"- 展开后：摘要行隐藏，助手文本按原生渲染（不进面板），thinking 与工具卡进面板；展开的 thinking 再套一层更深的内卡，工具卡只用外卡底色。",
 						].join("\n"),
 						"纯函数口径（`buildMessageSummary`）：",
 						fence([
