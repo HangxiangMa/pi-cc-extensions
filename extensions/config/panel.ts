@@ -26,6 +26,7 @@ import {
 import { applyStartupHeader, clearStartupHeader } from "../feature/shell/startup-header.ts";
 import type { ToolGroupingHooks } from "../renderer/tool/grouping.ts";
 import {
+	COMPACT_RUNNING_DISPLAY_MODES,
 	config,
 	DEFAULT_CONFIG,
 	DIFF_COLLAPSED_LINES_VALUES,
@@ -46,6 +47,7 @@ import {
 	INPUT_CLIP_VALUES,
 	WRITE_DIFF_COLLAPSED_LINES_VALUES,
 	updateConfig,
+	type CompactRunningDisplay,
 	type CompactStyleMode,
 	type Config,
 	type DiffIndicatorMode,
@@ -66,6 +68,13 @@ function modeSettingDescription(mode: CompactStyleMode): string {
 		return "Pi native tool rendering. Diff options below still apply independently.";
 	}
 	return "Claude Code style with rich edit/write diffs. Tune diff options below.";
+}
+
+function compactRunningDescription(value: CompactRunningDisplay): string {
+	if (value === "live") {
+		return "During a compact round, keep a live block with the active thinking tail and the running tool; the block folds back into the summary line when the round ends.";
+	}
+	return "Only the Running/Ran summary line while a round is in progress. Switch to live to watch thinking and the running tool.";
 }
 
 function excludeRenderersDescription(names: readonly string[]): string {
@@ -679,6 +688,15 @@ export async function showCcstylePanel(
 					hooks.applyStyleMode(mode, ctx, toolGrouping);
 					return;
 				}
+				case "compactRunningDisplay": {
+					const next: CompactRunningDisplay = value === "live" ? "live" : "summary";
+					updateConfig({ compactRunningDisplay: next });
+					compactRunningSetting.currentValue = next;
+					compactRunningSetting.description = compactRunningDescription(next);
+					hooks.refreshCurrentTranscript(ctx);
+					ctx.ui.notify(`Updated ${id}: ${value}`, "info");
+					return;
+				}
 				case "excludeRenderers":
 					excludeSetting.currentValue = formatExcludeRenderers(config.excludeRenderers);
 					excludeSetting.description = excludeRenderersDescription(config.excludeRenderers);
@@ -801,11 +819,18 @@ export async function showCcstylePanel(
 			ctx.ui.notify(`Updated ${id}: ${value}`, "info");
 		};
 
+		const compactRunningSetting = {
+			id: "compactRunningDisplay",
+			label: "Compact running",
+			description: compactRunningDescription(config.compactRunningDisplay),
+			currentValue: config.compactRunningDisplay,
+			values: [...COMPACT_RUNNING_DISPLAY_MODES],
+		};
 		const sections: CcstyleSection[] = [
 			{
 				id: "style",
 				label: "Style",
-				items: [modeSetting, excludeSetting],
+				items: [modeSetting, compactRunningSetting, excludeSetting],
 			},
 			{
 				id: "feature",

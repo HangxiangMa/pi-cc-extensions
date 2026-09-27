@@ -13,16 +13,13 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { config, formatConfigStatus, normalizeConfig } from "../extensions/config/config.ts";
 import { installCompactThinking } from "../extensions/feature/compact-thinking.ts";
-import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import {
 	buildMessageSummary,
 	installCompactMode,
 	isCompactAssistantComponent,
-	markCompactRoundToolExpanded,
 	refreshCompactModeComponents,
 	styleCompactThinkingText,
 } from "../extensions/renderer/compact-mode.ts";
-import { componentAtLocalRow } from "../extensions/renderer/mouse/layout.ts";
 import { setToolMouseTui } from "../extensions/renderer/mouse/scroll.ts";
 import { refreshMountedTranscript } from "../extensions/renderer/transcript-refresh.ts";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
@@ -178,6 +175,13 @@ test("config normalize keeps compact, defaults to on, command completions order 
 	assert.equal(normalizeConfig({ mode: "compact" }).mode, "compact");
 	assert.equal(normalizeConfig({}).mode, "on");
 	assert.equal(normalizeConfig({ mode: "invalid" }).mode, "on");
+	assert.equal(normalizeConfig({}).compactRunningDisplay, "summary");
+	assert.equal(normalizeConfig({ compactRunningDisplay: "live" }).compactRunningDisplay, "live");
+	assert.equal(
+		normalizeConfig({ compactRunningDisplay: "bogus" }).compactRunningDisplay,
+		"summary",
+	);
+	assert.match(formatConfigStatus(normalizeConfig({})), /compactRunning=summary/);
 	assert.equal(normalizeConfig({}).writeDiffCollapsedLines, 0);
 	assert.equal(normalizeConfig({ writeDiffCollapsedLines: 0 }).writeDiffCollapsedLines, 0);
 	assert.equal(normalizeConfig({}).dimThinkingText, false);
@@ -525,21 +529,14 @@ test("expanded running round keeps thinking and tools in transcript order", () =
 	}
 });
 
-test("compact 整回合展开卡内工具可单击二次展开", () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-compact-round-tool-"));
+test("compact live running display keeps one thinking preview and one tool slot, then folds back", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-live-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
 	const previousMode = config.mode;
 	config.mode = "compact";
-	const previousTheme = getMessageDisplayTheme();
-	setMessageDisplayTheme({
-		fg: (_color: string, text: string) => text,
-		bold: (text: string) => text,
-		italic: (text: string) => text,
-		bg: (_slot: string, text: string) => text,
-	} as any);
-	const writeMetadata = new WriteExecutionMetadataStore();
-	const defaultMode = installDefaultMode(writeMetadata);
+	const previousRunning = config.compactRunningDisplay;
+	config.compactRunningDisplay = "live";
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
@@ -547,67 +544,99 @@ test("compact 整回合展开卡内工具可单击二次展开", () => {
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
-	const hooks = installCompactMode({ writeMetadata });
+	const hooks = installCompactMode({ writeMetadata: new WriteExecutionMetadataStore() });
 	try {
-		const message = {
+		// anchor：思考已收尾（末块是 toolCall），工具开始跑。
+		const message1 = {
 			role: "assistant",
 			timestamp: 1,
 			content: [
-				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
-				{ type: "toolCall", id: "b2", name: "bash", arguments: { command: "two" } },
+				{ type: "thinking", thinking: "plan-one" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "echo-one" } },
 			],
 		};
-		const first = tool("bash", "b1", { command: "one" });
-		const second = tool("bash", "b2", { command: "two" });
-		for (const item of [first, second]) {
-			item.executionStarted = true;
-			item.updateDisplay?.();
-		}
-		const anchor = new AssistantMessageComponent(message as any, true) as any;
-		anchor.updateContent(message);
-		const output = { content: [{ type: "text", text: "line one\nline two" }], isError: false };
-		first.updateResult(output);
-		second.updateResult(output);
-		anchor.setExpanded(true);
+		const bash = tool("bash", "b1", { command: "echo-one" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const assistant1 = new AssistantMessageComponent(message1 as any, true) as any;
+		assistant1.updateContent(message1);
 
-		const plainLines = (): string[] =>
-			anchor
-				.render(120)
-				.map((line: string) =>
-					line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""),
-				);
-		// 渲染样式随 mode/主题变化，按命中结果定位工具行，不按提示文案。
-		const rows = plainLines();
-		const toolRows = rows
-			.map((_line, index) => index)
-			.filter((index) => componentAtLocalRow(anchor, index, 120)?.component === first);
-		assert.ok(toolRows.length > 0, `展开卡里应能命中工具行: ${rows.join("\n")}`);
+		let text = renderText(assistant1).join("\n");
+		assert.match(text, /Running\.\.\./);
+		assert.ok(text.includes("echo-one"), `live 槽位应显示运行中的工具: ${text}`);
+		assert.deepEqual(renderText(bash), [], "槽位接管的工具外层不再单独成行");
 
-		// 未标记时仍被强制折叠压回（保持「回合展开不递归展开工具」的既有行为）。
-		first.setExpanded(true);
-		assert.equal(first.expanded, false, "未确认用户展开前仍强制折叠");
+		// 工具完成：槽位保留终态，等下一个工具接手，不出现「完成即消失」的闪动。
+		bash.updateResult({ content: [{ type: "text", text: "ok-one" }], isError: false });
+		text = renderText(assistant1).join("\n");
+		assert.ok(text.includes("echo-one"), `工具完成后槽位仍应保留: ${text}`);
+		assert.deepEqual(renderText(bash), [], "完成态仍由槽位接管");
 
-		// 用户点开：放行，并在卡内渲染出输出。
-		markCompactRoundToolExpanded(first);
-		first.setExpanded(true);
-		assert.equal(first.expanded, true, "用户点开的 round 内工具应保持展开");
-		const expandedText = plainLines().join("\n");
-		assert.match(expandedText, /line one/, `展开后应看到输出: ${expandedText}`);
+		// 第二个成员：思考已收尾 + 新工具；第三个成员：思考仍在长。
+		const message2 = {
+			role: "assistant",
+			timestamp: 2,
+			content: [
+				{ type: "thinking", thinking: "plan-two" },
+				{ type: "toolCall", id: "g1", name: "grep", arguments: { pattern: "needle" } },
+			],
+		};
+		const grep = tool("grep", "g1", { pattern: "needle" });
+		grep.updateDisplay?.();
+		const assistant2 = new AssistantMessageComponent(message2 as any, true) as any;
+		assistant2.updateContent(message2);
+		const message3 = {
+			role: "assistant",
+			timestamp: 3,
+			content: [{ type: "thinking", thinking: "plan-three" }],
+		};
+		const assistant3 = new AssistantMessageComponent(message3 as any, true) as any;
+		assistant3.updateContent(message3);
 
-		// 单开：展开第二个时第一个收回。
-		markCompactRoundToolExpanded(second);
-		second.setExpanded(true);
-		assert.equal(second.expanded, true);
-		assert.equal(first.expanded, false, "单开语义：其他 round 内工具应收起");
+		text = renderText(assistant1).join("\n");
+		assert.match(text, /plan-three/, `活动思考应预览: ${text}`);
+		assert.doesNotMatch(text, /plan-one|plan-two/, `只有活动思考预览，中间态不堆积: ${text}`);
+		assert.deepEqual(renderText(assistant2), [], "成员本体不重复渲染");
+		assert.deepEqual(renderText(assistant3), [], "思考预览已移进槽位卡");
 
-		// 回合收起再展开后回到纯折叠态。
-		anchor.setExpanded(false);
-		anchor.setExpanded(true);
-		assert.equal(second.expanded, false, "回合重新展开后工具回到折叠");
+		// 回合结束：最终正文出现 → 整块收回收摘要行。
+		const finalMessage = {
+			role: "assistant",
+			timestamp: 4,
+			content: [{ type: "text", text: "done-live" }],
+		};
+		const final = new AssistantMessageComponent(finalMessage as any, true) as any;
+		final.updateContent(finalMessage);
+		const folded = renderText(assistant1).join("\n");
+		assert.match(folded, /Ran for /, `回合结束应收回收摘要行: ${folded}`);
+		assert.doesNotMatch(folded, /plan-three/, `回合结束后思考预览应回收: ${folded}`);
+		assert.match(folded, /bash×1/);
+		assert.match(folded, /grep×1/);
+		assert.deepEqual(renderText(assistant3), []);
+
+		// 默认 summary：运行中不预览思考、工具不占位。
+		config.compactRunningDisplay = "summary";
+		const message4 = {
+			role: "assistant",
+			timestamp: 5,
+			content: [
+				{ type: "thinking", thinking: "quiet-plan" },
+				{ type: "toolCall", id: "b2", name: "bash", arguments: { command: "echo-quiet" } },
+			],
+		};
+		const quietBash = tool("bash", "b2", { command: "echo-quiet" });
+		quietBash.executionStarted = true;
+		quietBash.updateDisplay?.();
+		const assistant4 = new AssistantMessageComponent(message4 as any, true) as any;
+		assistant4.updateContent(message4);
+		const summaryText = renderText(assistant4).join("\n");
+		assert.match(summaryText, /Running\.\.\./);
+		assert.doesNotMatch(summaryText, /quiet-plan/);
+		assert.ok(!summaryText.includes("echo-quiet"), `summary 态工具不进槽位: ${summaryText}`);
+		assert.deepEqual(renderText(quietBash), []);
 	} finally {
+		config.compactRunningDisplay = previousRunning;
 		hooks.shutdown();
-		defaultMode.shutdown();
-		setMessageDisplayTheme(previousTheme);
 		config.mode = previousMode;
 		emit("session_shutdown", {}, ctx);
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

@@ -1005,6 +1005,8 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		detachedMessages: any[];
 		active: boolean;
 		suppressedToolIds: Set<string>;
+		/** live 槽位内联渲染的工具 id；回合结束时随槽位一起交还外层。 */
+		liveSlotToolIds: Set<string>;
 		/** 回合挂钟起点，保证 Running 时长连续递增。 */
 		startedAt: number;
 		endedAt?: number;
@@ -1014,6 +1016,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 	const expandedRoundToolIds = new Set<string>();
 	/** 用户显式点开的 round 内工具；强制折叠不压回这些 id。 */
 	const explicitRoundToolIds = new Set<string>();
+	const liveSlotToolIds = new Set<string>();
 	let uiRef: { requestRender?: (force?: boolean) => void } | undefined;
 	let roundTickTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -1115,6 +1118,126 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		return ids;
 	};
 
+	/**
+	 * 末块仍是 thinking = 思考还在长；后面跟了正文或工具调用就算结束。
+	 * 围观态只预览这一种，已完成的思考直接回收进摘要行，不在屏幕上留 Thought 行。
+	 */
+	const hasTrailingThinking = (message: any): boolean => {
+		const content = Array.isArray(message?.content) ? message.content : [];
+		for (let i = content.length - 1; i >= 0; i--) {
+			const item = content[i];
+			if (item?.type === "thinking") return true;
+			if (item?.type === "toolCall") return false;
+			if (item?.type === "text" && String(item.text ?? "").trim()) return false;
+		}
+		return false;
+	};
+
+	/** 运行中的工具：已开始且尚无最终结果。 */
+	const isRunningTool = (tool: any): boolean =>
+		tool?.executionStarted === true && (!tool.result || tool.isPartial === true);
+
+	/**
+	 * live 围观态：整个回合只维护一个槽位卡（摘要行仍是外层独立行）。
+	 * - 思考：只保留最后一条仍在思考的消息，且只把它的预览移进槽位；
+	 * - 工具：优先运行中的，否则保留本回合最后一个，槽位不空转也不随完成消失；
+	 * - 本回合所有工具都由槽位卡内联渲染，外层不再单独成行。
+	 * 可见性判断只在这里发生；回合结束（renderRound 非 active）整块收回收摘要行。
+	 */
+	const renderRoundLive = (
+		round: CompactRound,
+		stopStatus: string | undefined,
+		getSummary: () => string,
+	): void => {
+		let previewComponent: any;
+		for (const [component, message] of round.messages) {
+			if (hasTrailingThinking(message)) previewComponent = component;
+		}
+
+		const thinkingKids: any[] = [];
+		for (const [component, message] of round.messages) {
+			if (component !== previewComponent) {
+				// 已完成的思考整体回收：留在屏幕上只会堆积成中间态。
+				if (component === round.anchor) renderAssistantWithoutThinking(component, message);
+				else component.contentContainer?.clear?.();
+				continue;
+			}
+			passThroughAssistant(component, message);
+			const kids = Array.isArray(component.contentContainer?.children)
+				? [...component.contentContainer.children]
+				: [];
+			component.contentContainer?.clear?.();
+			if (component !== round.anchor) {
+				// 非 anchor 成员只有思考与工具调用，只留思考预览。
+				for (const kid of kids) {
+					if (typeof kid?.setHintHovered === "function") thinkingKids.push(kid);
+				}
+				continue;
+			}
+			// anchor：正文留在原位，只把思考预览摘进槽位卡，并去掉摘走后的连续空行。
+			const kept: any[] = [];
+			for (const kid of kids) {
+				if (typeof kid?.setHintHovered === "function") {
+					thinkingKids.push(kid);
+					continue;
+				}
+				if (
+					kid instanceof Spacer &&
+					(kept.length === 0 || kept[kept.length - 1] instanceof Spacer)
+				) {
+					continue;
+				}
+				kept.push(kid);
+			}
+			while (kept.length > 0 && kept[kept.length - 1] instanceof Spacer) kept.pop();
+			for (const kid of kept) component.contentContainer.addChild(kid);
+		}
+
+		const toolsById = new Map<string, any>();
+		for (const tool of trackedToolComponents) {
+			if (typeof tool?.toolCallId === "string") toolsById.set(tool.toolCallId, tool);
+		}
+		let runningTool: any;
+		let lastTool: any;
+		for (const [, message] of round.messages) {
+			for (const item of Array.isArray(message?.content) ? message.content : []) {
+				if (item?.type !== "toolCall" || typeof item.id !== "string") continue;
+				const tool = toolsById.get(item.id);
+				// edit/write 保留自己的 compact 行，不进槽位。
+				if (EDIT_WRITE_TOOLS.has(String(tool?.toolName ?? item.name ?? ""))) continue;
+				round.liveSlotToolIds.add(item.id);
+				liveSlotToolIds.add(item.id);
+				if (!tool) continue;
+				lastTool = tool;
+				if (isRunningTool(tool)) runningTool = tool;
+			}
+		}
+		// 槽位里的工具保持折叠；要读全量输出走整回合展开卡。
+		for (const tool of trackedToolComponents) {
+			if (!round.liveSlotToolIds.has(String(tool?.toolCallId ?? "")) || tool.expanded !== true) {
+				continue;
+			}
+			if (typeof tool.setExpanded === "function") tool.setExpanded(false);
+			else {
+				tool.expanded = false;
+				tool.updateDisplay?.();
+			}
+		}
+
+		compactAssistantLine(round.anchor, getSummary, deps.query);
+		const slotTool = runningTool ?? lastTool;
+		const cardItems: Array<{ child?: any; tool?: any }> = thinkingKids.map((child) => ({ child }));
+		if (slotTool) cardItems.push({ tool: slotTool });
+		if (cardItems.length > 0) {
+			round.anchor.contentContainer.addChild(
+				compactRoundCard(cardItems, (tool, innerWidth) =>
+					patch.toolOriginalRender.call(tool, innerWidth),
+				),
+			);
+		}
+		appendStopStatus(round.anchor, stopStatus);
+	};
+
 	const renderRound = (round: CompactRound): void => {
 		const messages = roundMessages(round);
 		const stopStatus = roundStopStatus(messages);
@@ -1128,6 +1251,8 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		if (round.anchor.expanded !== true) {
 			for (const id of roundToolCallIds(round)) explicitRoundToolIds.delete(id);
 		}
+		for (const id of round.liveSlotToolIds) liveSlotToolIds.delete(id);
+		round.liveSlotToolIds.clear();
 
 		for (const [component, message] of round.messages) {
 			component.lastMessage = message;
@@ -1270,6 +1395,12 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 			return;
 		}
 
+		if (round.active && config.compactRunningDisplay === "live") {
+			// 围观态：单一槽位卡（活动思考预览 + 当前工具），回合结束自动收回。
+			renderRoundLive(round, stopStatus, getSummary);
+			return;
+		}
+
 		for (const [component, message] of round.messages) {
 			if (component === round.anchor) {
 				renderAssistantWithoutThinking(component, message);
@@ -1299,6 +1430,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		roundByComponent = new WeakMap();
 		expandedRoundToolIds.clear();
 		explicitRoundToolIds.clear();
+		liveSlotToolIds.clear();
 		deps.query?.setCompactSummaryActive?.(false);
 		stopRoundTick();
 	};
@@ -1337,6 +1469,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 					detachedMessages: [],
 					active: true,
 					suppressedToolIds: new Set(),
+					liveSlotToolIds: new Set(),
 					startedAt: Date.now(),
 				};
 				roundByComponent.set(this, round);
@@ -1348,6 +1481,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 					detachedMessages: [],
 					active: true,
 					suppressedToolIds: new Set(),
+					liveSlotToolIds: new Set(),
 					startedAt: Date.now(),
 				};
 				roundByComponent.set(this, round);
@@ -1371,7 +1505,8 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 				return renderAssistantWithoutThinking(this, message);
 			}
 			if (round) {
-				endRound(round);
+				// 围观态下 anchor 还挂着槽位卡，必须重绘才能收回。
+				endRound(round, true);
 				roundByComponent.delete(this);
 				return passThroughAssistant(this, message);
 			}
@@ -1389,6 +1524,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 					detachedMessages: [],
 					active: true,
 					suppressedToolIds: new Set(),
+					liveSlotToolIds: new Set(),
 					startedAt: Date.now(),
 				};
 				roundByComponent.set(this, round);
@@ -1424,6 +1560,9 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		}
 		// Agent/Task 等同普通工具：折叠不外置（live 面板走独立 widget）。
 		if (expandedRoundToolIds.has(String(this.toolCallId ?? ""))) return [];
+		// live 围观态：本回合工具交由槽位卡内联渲染，外层不再单独成行，
+		// 卡片因此不会随工具完成反复挂载/卸载。
+		if (liveSlotToolIds.has(String(this.toolCallId ?? ""))) return [];
 		// 普通工具折叠时不显示独立行（摘要行已统计），独立展开走原 renderer。
 		if (this.expanded === true) {
 			return patch.toolOriginalRender.call(this, width);

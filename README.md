@@ -46,6 +46,7 @@ pi install git:github.com/minuque/pi-cc-extensions
 {
   // style
   "mode": "on",                            // on / compact / off
+  "compactRunningDisplay": "summary",      // compact 折叠态：summary 只挂摘要行 / live 围观活动思考与运行中工具
   "excludeRenderers": [],                  // 走原生渲染的工具名；Agent 始终保留专用渲染器
 
   // features
