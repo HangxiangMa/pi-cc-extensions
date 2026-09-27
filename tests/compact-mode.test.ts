@@ -615,6 +615,71 @@ test("compact 整回合展开卡内工具可单击二次展开", () => {
 	}
 });
 
+test("compact 折叠态工具卡复用 ccstyle 默认样式", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-ccstyle-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const previousMode = config.mode;
+	config.mode = "compact";
+	const previousExclude = [...config.excludeRenderers];
+	const previousTheme = getMessageDisplayTheme();
+	setMessageDisplayTheme({
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		italic: (text: string) => text,
+		bg: (_slot: string, text: string) => text,
+	} as any);
+	const writeMetadata = new WriteExecutionMetadataStore();
+	// default-mode 先装，compact 才能把它的 renderPaint 当作 toolOriginalRender。
+	const defaultMode = installDefaultMode(writeMetadata);
+	const { pi, ctx, emit } = extensionRuntime();
+	installCompactThinking(pi, {
+		useSummaryTitlesAsThinkingTitle: false,
+		previewLines: 3,
+		animationIntervalMs: 30,
+	});
+	emit("session_start", {}, ctx);
+	const hooks = installCompactMode({ writeMetadata });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "rg -n renderRound" } },
+			],
+		};
+		const bash = tool("bash", "b1", { command: "rg -n renderRound" });
+		bash.executionStarted = true;
+		bash.updateDisplay?.();
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		anchor.updateContent(message);
+		bash.updateResult({ content: [{ type: "text", text: "line one\nline two" }], isError: false });
+		// compact 展开卡里的工具由 ccstyle call/result 渲染
+		anchor.setExpanded(true);
+
+		const text = renderText(anchor).join("\n");
+		assert.match(text, /2 lines returned/, `compact 工具卡应复用 ccstyle 摘要: ${text}`);
+		assert.doesNotMatch(text, /Took /, `不应回落到原生输出: ${text}`);
+
+		// excludeRenderers 仍然强制原生，不受这次放宽影响。
+		config.excludeRenderers = ["bash"];
+		bash.invalidate?.();
+		const nativeText = renderText(anchor).join("\n");
+		assert.doesNotMatch(nativeText, /2 lines returned/, `排除名单内应保留原生: ${nativeText}`);
+		config.excludeRenderers = [...previousExclude];
+	} finally {
+		config.excludeRenderers = previousExclude;
+		hooks.shutdown();
+		defaultMode.shutdown();
+		setMessageDisplayTheme(previousTheme);
+		config.mode = previousMode;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("Running duration recomputes on each render via round wall clock", () => {
 	const previousMode = config.mode;
 	config.mode = "compact";

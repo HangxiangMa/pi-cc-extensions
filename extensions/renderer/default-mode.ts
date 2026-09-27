@@ -221,7 +221,7 @@ function createCcstyleTool(
 		...originalTool,
 		renderShell: "self",
 		renderCall(args: any, theme: any, context: any) {
-			if (config.mode !== "on") {
+			if (config.mode === "off") {
 				return renderDefault(originalTool, "renderCall", [args, theme, context], String(toolName));
 			}
 
@@ -293,7 +293,7 @@ function createCcstyleTool(
 			};
 		},
 		renderResult(result: any, options: any, theme: any, context: any) {
-			if (config.mode !== "on") {
+			if (config.mode === "off") {
 				return renderDefault(
 					originalTool,
 					"renderResult",
@@ -416,8 +416,9 @@ function shouldGloballyStyleTool(component: any, patch: GlobalToolRenderPatch): 
 	const builtInDefinition = component.builtInToolDefinition;
 	const definition = extensionDefinition ?? builtInDefinition;
 	const toolName = String(component.toolName || definition?.name || "");
+	// compact 也复用同一套 ccstyle call/result，避免折叠态工具卡回落到 Pi 原生样式。
 	const useCcstyle =
-		patch.mode() === "on" &&
+		patch.mode() !== "off" &&
 		!DEDICATED_RENDERER_TOOLS.has(toolName) &&
 		!preservesOriginalRenderer(extensionDefinition, toolName, builtInDefinition);
 	component[COMPONENT_TOOL_RENDER_MODE] = useCcstyle;
