@@ -45,7 +45,12 @@ import { getToolMouseTui } from "./mouse/scroll.ts";
 import { insetComponent, renderExpandedToolResult, scheduleAnimation } from "./tool/result.ts";
 import { paddedBackgroundRow } from "./tool/grouping.ts";
 import { formatDisplayPath } from "./tool/names.ts";
-import { hasVisibleText, stripAnsi, stripBackgroundAnsi } from "../utils/ansi-text.ts";
+import {
+	hasVisibleText,
+	removeStyledRange,
+	stripBackgroundAnsi,
+	stripTerminalSequencesPreservingLayout,
+} from "../utils/ansi-text.ts";
 import { walkComponentTree } from "../utils/component-tree.ts";
 import {
 	ASSISTANT_REENTRY_KEY,
@@ -377,13 +382,15 @@ function layoutExpandedToolCard(
 		const head = line.match(/^((?:\x1b\[[0-9;]*m)*)( *)/);
 		const ansi = head?.[1] ?? "";
 		const spaces = head?.[2]?.length ?? 0;
-		if (lines.length === 0) {
-			liveLead = spaces;
-			lines.push(`↳ ${ansi}${truncateToWidth(line.slice(ansi.length + spaces), innerWidth, "")}`);
-			return;
-		}
-		const dedented = line.slice(ansi.length + Math.min(spaces, liveLead));
-		lines.push(`  ${truncateToWidth(dedented, innerWidth, "")}`);
+		const first = lines.length === 0;
+		if (first) liveLead = spaces;
+		// 首行挂 muted 的 `↳`（与 default-mode 工具结果行同色）；续行按 liveLead 去缩进。
+		// 两侧都保留行首 SGR：丢掉它整行会掉回终端默认前景色。
+		const marker = first ? `${theme.fg("muted", "↳")} ` : "  ";
+		const lead = first ? spaces : Math.min(spaces, liveLead);
+		lines.push(
+			`${marker}${ansi}${truncateToWidth(line.slice(ansi.length + lead), innerWidth, "")}`,
+		);
 	};
 	const pushBlank = () => {
 		if (live || lastBlank) return;
@@ -944,22 +951,21 @@ function compactStopStatusLine(status: string, pad = 0): any {
 /** 展开入口的动作词：我们的 `click to show more`、pi 的 `<key> to expand`（键名可能取不到）。 */
 const EXPAND_ACTION = String.raw`(?:click to show more|(?:[\w/+]+\s+)?to (?:show more|expand))`;
 
-const SLOT_HINT_PATTERNS: Array<{ re: RegExp; keepTail: string }> = [
+const SLOT_HINT_PATTERNS: RegExp[] = [
 	// 卡在括号里：`(9 more lines, click to show more)` / `(195 earlier lines, ctrl+o to expand)`，
 	// 只去掉动作词，收尾括号与计数保留。
-	{ re: new RegExp(String.raw`,\s*[^()]*?${EXPAND_ACTION}(?=\))`), keepTail: ")" },
+	new RegExp(String.raw`,\s*[^()]*?${EXPAND_ACTION}(?=\))`),
 	// 直接挂在行尾：整段去掉。
-	{ re: new RegExp(String.raw`\s*(?:•\s*)?${EXPAND_ACTION}\s*$`), keepTail: "" },
+	new RegExp(String.raw`\s*(?:•\s*)?${EXPAND_ACTION}\s*$`),
 ];
 
 function stripSlotHint(line: string): string {
-	const plain = stripAnsi(line);
-	for (const { re, keepTail } of SLOT_HINT_PATTERNS) {
+	const plain = stripTerminalSequencesPreservingLayout(line);
+	for (const re of SLOT_HINT_PATTERNS) {
 		const match = re.exec(plain);
 		if (!match) continue;
-		const prefixWidth = visibleWidth(plain.slice(0, match.index));
-		const tail = keepTail ? plain.slice(match.index + match[0].length) : "";
-		return truncateToWidth(line, prefixWidth, "") + tail;
+		// 删除区间而非截断后拼纯文本：收尾括号留在原样式里（dim），不会掉回默认前景色。
+		return removeStyledRange(line, match.index, match.index + match[0].length);
 	}
 	return line;
 }
