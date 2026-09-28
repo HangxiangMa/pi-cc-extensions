@@ -30,7 +30,7 @@ import {
 	teardownToolMouseInteraction,
 	TOOL_MOUSE_DISABLE,
 } from "./mouse/interaction.ts";
-import { getToolMouseTui } from "./mouse/scroll.ts";
+import { getToolMouseTui, noteNewTranscriptItem } from "./mouse/scroll.ts";
 import { setHoveredToolGroup, setHoveredToolIo } from "./mouse/hover.ts";
 import { clearAllAnimations } from "./tool/result.ts";
 import { installWriteOverride, WriteExecutionMetadataStore } from "./tool/diff/index.ts";
@@ -189,6 +189,13 @@ export default function (
 		}
 	});
 
+	// 回到底部按钮的累计计数：离开底部期间每落一块内容 +1。
+	pi.on("message_start", async (event) => {
+		const role = event.message?.role;
+		// toolResult 不单独成块（渲染在工具卡内），跳过以免与工具卡重复计数。
+		if (role === "user" || role === "assistant" || role === "custom") noteNewTranscriptItem();
+	});
+
 	pi.on("tool_execution_end", async (event) => {
 		if (config.mode !== "compact") return;
 		// Agent 等工具收尾后延迟刷新，让 compact-thinking 先落最终态。
@@ -243,6 +250,7 @@ export default function (
 
 	pi.on("tool_execution_start", async (_event, ctx) => {
 		installation?.toolGrouping.setTheme(ctx.ui.theme);
+		noteNewTranscriptItem();
 	});
 
 	pi.on("session_shutdown", async () => {
