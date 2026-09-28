@@ -32,7 +32,7 @@ import {
 } from "../extensions/renderer/tool/message-display.ts";
 import { WriteExecutionMetadataStore } from "../extensions/renderer/tool/diff/write-execution.ts";
 import { invalidateIoView, isExpandedToolIoView } from "../extensions/renderer/tool/result.ts";
-import { toolCallSummary } from "../extensions/renderer/tool/names.ts";
+import { displayPath, toolCallSummary } from "../extensions/renderer/tool/names.ts";
 
 initTheme("dark");
 
@@ -213,6 +213,14 @@ test("config normalize keeps compact, defaults to on, command completions order 
 	} finally {
 		config.mode = previousMode;
 	}
+});
+
+test("displayPath preserves native separators for POSIX and Windows paths", () => {
+	assert.equal(displayPath("/home/user/project/src/file.ts", "/home/user/project"), "src/file.ts");
+	assert.equal(
+		displayPath("C:\\Users\\user\\project\\src\\file.ts", "C:\\Users\\user\\project"),
+		"src\\file.ts",
+	);
 });
 
 test("tool path summaries relativize cwd paths and preserve filenames when clipped", () => {
