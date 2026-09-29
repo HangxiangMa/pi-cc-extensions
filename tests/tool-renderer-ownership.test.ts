@@ -40,12 +40,18 @@ test("claude-code-style registers the write override at session_start", async ()
 	claudeCodeStyleExtension(pi as any);
 
 	// 加载阶段不注册 write override：此时其他扩展（如 pi-spark）尚未加载，
-	// 直接注册会与对方撞名。延迟到 session_start 后所有扩展已就绪再注册。
+	// 直接注册会与对方撞名。延后到 session_start 之后一拍，等所有扩展注册完再检测。
 	assert.deepEqual(
 		registeredTools.map((tool: any) => tool.name),
 		[],
 	);
 	await emit("session_start", {}, { mode: "print", hasUI: false });
+	assert.deepEqual(
+		registeredTools.map((tool: any) => tool.name),
+		[],
+	);
+	// 延后一拍：等所有扩展的 session_start 跑完，确认没有外部 write 后才注册。
+	await new Promise((resolve) => setTimeout(resolve, 0));
 	assert.deepEqual(
 		registeredTools.map((tool: any) => tool.name),
 		["write"],

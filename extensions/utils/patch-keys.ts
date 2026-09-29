@@ -29,6 +29,8 @@ export const COMPONENT_TOOL_RENDER_MODE = Symbol.for("pi.ccstyle.component-tool-
 export const TOOL_EXPANDED_BACKGROUND_PATCH = Symbol.for(
 	"pi.ccstyle.tool-expanded-background-patch",
 );
+// write 归属：注册期确认一次，渲染期据此决定是否提供 rich diff。
+export const WRITE_OWNERSHIP_SLOT = Symbol.for("pi.ccstyle.write-ownership");
 
 // ── 消息组件补丁 ──
 export const MESSAGE_DISPLAY_PATCH = Symbol.for("pi.ccstyle.message-display-patch");

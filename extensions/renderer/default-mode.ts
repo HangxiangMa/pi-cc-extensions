@@ -100,6 +100,8 @@ type ToolExpandedBackgroundPatch = {
 	dispose: () => void;
 };
 
+/** rich diff 的两个入口（本处与 compact 的 paintCompactEditWrite）都靠 renderRichToolResult
+ * 返回 undefined 让位，这里只判断模式与工具名，避免多一个可能与让位不一致的 gate。 */
 export function shouldRenderRichDiff(
 	mode: CompactStyleMode,
 	toolName: string,
