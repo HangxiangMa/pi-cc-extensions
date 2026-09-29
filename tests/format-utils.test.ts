@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { config } from "../extensions/config/config.ts";
+import { displayPath, formatDisplayPath } from "../extensions/renderer/tool/names.ts";
 import { formatDuration, oneLine } from "../extensions/utils/format.ts";
 
 test("formatDuration formats elapsed seconds", () => {
@@ -30,4 +32,32 @@ test("oneLine: sanitize 上限 4096，避免扫超大输入", () => {
 	const out = oneLine(huge, 20);
 	assert.equal(out.length, 20);
 	assert.equal(out.startsWith("y"), true);
+});
+
+test("displayPath / formatDisplayPath 保留 POSIX 与 Windows 原生分隔符", () => {
+	assert.equal(displayPath("/home/user/project/src/file.ts", "/home/user/project"), "src/file.ts");
+	assert.equal(
+		displayPath("C:\\Users\\user\\project\\src\\file.ts", "C:\\Users\\user\\project"),
+		"src\\file.ts",
+	);
+
+	// 工具卡摘要入口：截断走 lastIndexOf("/") / lastIndexOf("\\") 定位文件名，各保留原生分隔符
+	const previous = config.inputClip;
+	try {
+		config.inputClip = 100;
+		assert.equal(
+			formatDisplayPath("/home/user/project/src/deep/file.ts", "/home/user/project", 12),
+			"src…/file.ts",
+		);
+		assert.equal(
+			formatDisplayPath(
+				"C:\\Users\\user\\project\\src\\deep\\file.ts",
+				"C:\\Users\\user\\project",
+				12,
+			),
+			"src…\\file.ts",
+		);
+	} finally {
+		config.inputClip = previous;
+	}
 });
