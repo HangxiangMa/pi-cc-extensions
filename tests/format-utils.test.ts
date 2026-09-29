@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { config } from "../extensions/config/config.ts";
-import { displayPath, formatDisplayPath } from "../extensions/renderer/tool/names.ts";
+import {
+	displayPath,
+	formatDisplayPath,
+	renderToolSummary,
+	toolCallSummary,
+} from "../extensions/renderer/tool/names.ts";
+import { toolViewportWidth } from "../extensions/renderer/tool/result.ts";
 import { formatDuration, oneLine } from "../extensions/utils/format.ts";
 
 test("formatDuration formats elapsed seconds", () => {
@@ -60,4 +66,39 @@ test("displayPath / formatDisplayPath 保留 POSIX 与 Windows 原生分隔符",
 	} finally {
 		config.inputClip = previous;
 	}
+});
+
+test("inputClip=0 按可用宽度截断；正数仍是字符上限", () => {
+	const previous = config.inputClip;
+	const command = `echo ${"x".repeat(300)}`;
+	const plain = (_color: string, text: string) => text;
+	try {
+		config.inputClip = 0;
+		const summary = toolCallSummary("bash", { command }, { variant: "grouping" });
+		assert.equal(summary.main, `Bash ${command}`, "摘要不预截断");
+		const line = renderToolSummary(summary, 180, plain);
+		assert.equal(line.length, 180, "宽屏铺满可用宽度");
+		assert.equal(line.endsWith("…"), true);
+		assert.equal(renderToolSummary(summary, 400, plain), `Bash ${command}`);
+		const path = `/repo/${"deep/".repeat(60)}file.ts`;
+		assert.equal(formatDisplayPath(path, undefined, 1000), path);
+
+		config.inputClip = 40;
+		const clipped = renderToolSummary(
+			toolCallSummary("bash", { command }, { variant: "grouping" }),
+			180,
+			plain,
+		);
+		assert.equal(clipped.length, "Bash ".length + 40);
+	} finally {
+		config.inputClip = previous;
+	}
+});
+
+test("toolViewportWidth: 窄屏按 80%，宽屏右侧留白封顶 24 列", () => {
+	assert.equal(toolViewportWidth(1), 1);
+	assert.equal(toolViewportWidth(80), 64);
+	assert.equal(toolViewportWidth(120), 96, "临界点：比例与固定留白相等");
+	assert.equal(toolViewportWidth(200), 176);
+	assert.equal(toolViewportWidth(300), 276);
 });

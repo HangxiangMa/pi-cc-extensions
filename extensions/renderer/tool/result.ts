@@ -7,9 +7,15 @@ import { getToolMouseTui } from "../mouse/scroll.ts";
 import { sanitizeToolResultText } from "../../utils/tool-result-sanitize.ts";
 
 const TOOL_VIEWPORT_WIDTH_RATIO = 0.8;
+/** 宽屏右侧留白上限：比例留白超过这么多列时改用固定留白。 */
+const TOOL_VIEWPORT_MAX_GUTTER = 24;
 
 export function toolViewportWidth(width: number): number {
-	return Math.max(1, Math.floor(width * TOOL_VIEWPORT_WIDTH_RATIO));
+	return Math.max(
+		1,
+		Math.floor(width * TOOL_VIEWPORT_WIDTH_RATIO),
+		Math.floor(width) - TOOL_VIEWPORT_MAX_GUTTER,
+	);
 }
 
 /** 与默认工具结果相同的一级缩进包装。子组件只扣始终加上的 1 列；↳ 行多出的 2 列由 truncateToWidth 吃掉。 */

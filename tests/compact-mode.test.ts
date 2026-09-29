@@ -185,9 +185,12 @@ test("config normalize keeps compact, defaults to on, command completions order 
 	assert.equal(normalizeConfig({}).dimThinkingText, false);
 	assert.equal(normalizeConfig({ dimThinkingText: true }).dimThinkingText, true);
 	assert.match(formatConfigStatus(normalizeConfig({})), /thinkingDim=off/);
-	assert.equal(normalizeConfig({}).inputClip, 100);
+	assert.equal(normalizeConfig({}).inputClip, 0);
 	assert.equal(normalizeConfig({ inputClip: 40 }).inputClip, 40);
-	assert.match(formatConfigStatus(normalizeConfig({})), /inputClip=100/);
+	assert.equal(normalizeConfig({ inputClip: "0" }).inputClip, 0);
+	assert.equal(normalizeConfig({ inputClip: 3 }).inputClip, 8);
+	assert.equal(normalizeConfig({ inputClip: 9999 }).inputClip, 500);
+	assert.match(formatConfigStatus(normalizeConfig({})), /inputClip=0/);
 	assert.equal(normalizeConfig({}).expandedInputMaxLines, 5);
 	assert.equal(normalizeConfig({}).expandedOutputMaxLines, 10);
 	assert.equal(normalizeConfig({ expandedInputMaxLines: 20 }).expandedInputMaxLines, 20);

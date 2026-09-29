@@ -470,3 +470,25 @@ test("humanizeToolLabel 保留品牌大小写", () => {
 	assert.equal(humanizeToolLabel("mcp"), "MCP");
 	assert.equal(humanizeToolLabel("mcpScript"), "MCP Script");
 });
+
+test("collapsed group rows share the single-card viewport width", async () => {
+	const { toolViewportWidth } = await import("../extensions/renderer/tool/result.ts");
+	const { visibleWidth } = await import("@earendil-works/pi-tui");
+	const hooks = installToolGrouping(() => true);
+	try {
+		const parent = new Container() as any;
+		const long = `echo ${"x".repeat(400)}`;
+		for (const id of ["a", "b"]) {
+			const bash = tool("bash", id, { command: long });
+			bash.updateResult({ content: [], isError: false });
+			parent.addChild(bash);
+		}
+		const rows = (parent.children[0] as ToolGroupComponent)
+			.render(200)
+			.filter((line: string) => /[├└]/.test(line));
+		assert.equal(rows.length, 2);
+		for (const row of rows) assert.equal(visibleWidth(row), toolViewportWidth(200));
+	} finally {
+		hooks.shutdown();
+	}
+});
