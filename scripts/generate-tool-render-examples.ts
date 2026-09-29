@@ -27,6 +27,7 @@ import {
 	getMessageDisplayTheme,
 	setMessageDisplayTheme,
 } from "../extensions/renderer/tool/message-display.ts";
+import { setToolMouseTui } from "../extensions/renderer/mouse/scroll.ts";
 import { setToolTuiFullscreen } from "../extensions/renderer/tool/show-more-hint.ts";
 import {
 	DEFAULT_TOOL_DISPLAY_CONFIG,
@@ -587,17 +588,18 @@ async function generateCompact() {
 				section(
 					"1. 消息折叠摘要行",
 					[
-						"含 toolCall 的 assistant 折叠为单行摘要（运行时长 + 工具计数）：",
+						"含 toolCall 的 assistant 折叠为单行摘要（运行时长 + 工具计数）。独立渲染下摘要跟在正文后（如下）；挂进 transcript 容器后，摘要行是回合末尾的独立尾行组件：",
 						fence([...activeLines, ...doneLines]),
 						"展开（Ctrl+O / 点击摘要行）后助手文本按原生渲染，thinking 与工具卡装进 userMessageBg 面板：",
 						fence(expandedLines),
 						[
 							"- 进行中：`Running... · <时长>`；结束后：`Ran for <时长>`。",
+							"- 摘要行挂在 transcript 容器内回合末尾（工具卡/diff 之下）：运行中恒在视口底缘可写区刷新，回合结束就地落成 `Ran for` 随 transcript 进入 scrollback；新工具卡追加时自动归位，不会越出回合。",
 							"- 时长 = max(thinking, 回合挂钟)；thinking 冻结后挂钟继续抬高。",
 							"- 工具按消息内首次出现顺序；`read` 按非空路径去重。",
 							"- `edit` / `write` **不进**摘要计数（各自独立单行）。",
 							"- Agent/Task 调用只进摘要；tool 卡始终折叠。底部面板走独立 widget。",
-							"- abort/error/length 状态行挂在摘要外层，不被折叠吞掉。",
+							"- abort/error/length 状态行挂在回合内摘要之上，不被折叠吞掉。",
 							"- 行末 `click to show more`；摘要永不换行。",
 							"- 展开后：摘要行隐藏，助手文本按原生渲染（不进面板），thinking 与工具卡进面板；展开的 thinking 再套一层更深的内卡，工具卡只用外卡底色。",
 						].join("\n"),
@@ -670,16 +672,48 @@ async function generateCompact() {
 			// write metadata for collapsed stats if needed
 			store.set("cw1", { fileExistedBeforeWrite: false });
 
-			chunks.push(
-				section(
-					"3. edit / write 独立行",
-					[
-						"edit/write 标题行带统计；折叠预览与展开正文复用 mode=on 的 Diff 配置：",
-						fence([...renderLines(edit), ...renderLines(write)]),
-						"展开 edit：",
-					].join("\n\n"),
-				),
-			);
+			// 挂进 transcript 容器后的真实回合布局：摘要尾行在 diff 之下、回合末尾，
+			// 运行中恒在可写视口底缘；回合结束后原地落成 Ran for 进 scrollback。
+			const chat = new Container() as any;
+			setToolMouseTui({ children: [chat] });
+			let tailLayout: string[] = [];
+			try {
+				const tailMsg = {
+					role: "assistant",
+					timestamp: 2,
+					content: [
+						{ type: "text", text: "updated sample.ts" },
+						{ type: "toolCall", id: "te1", name: "edit", arguments: { path: "sample.ts" } },
+					],
+				} as unknown as AssistantMessage;
+				const anchorC = new AssistantMessageComponent(tailMsg, true) as any;
+				const editT = succeed(tool("edit", "te1", { path: "sample.ts" }), undefined, {
+					diff: editDiff,
+				});
+				chat.addChild(anchorC);
+				chat.addChild(editT);
+				anchorC.updateContent(tailMsg);
+				// 下一条可见文本结束本回合，尾行就地翻成 Ran for。
+				const finMsg = {
+					role: "assistant",
+					content: [{ type: "text", text: "task done" }],
+				} as unknown as AssistantMessage;
+				const fin = new AssistantMessageComponent(finMsg, true) as any;
+				chat.addChild(fin);
+				fin.updateContent(finMsg);
+				tailLayout = renderLines(chat).filter((l) => l.trim());
+			} finally {
+				setToolMouseTui(null);
+			}
+
+			const bodyIntro = [
+				"edit/write 标题行带统计；折叠预览与展开正文复用 mode=on 的 Diff 配置：",
+				fence([...renderLines(edit), ...renderLines(write)]),
+				"挂进 transcript 容器后的回合布局——摘要尾行落在 diff 之下、回合末尾：",
+				fence(tailLayout),
+				"展开 edit：",
+			].join("\n\n");
+			chunks.push(section("3. edit / write 独立行", bodyIntro));
 			edit.setExpanded(true);
 			chunks[chunks.length - 1] = section(
 				"3. edit / write 独立行",
@@ -691,6 +725,8 @@ async function generateCompact() {
 						})),
 						...renderLines(write),
 					]),
+					"挂进 transcript 容器后的回合布局——摘要尾行落在 diff 之下、回合末尾：",
+					fence(tailLayout),
 					"展开 edit：",
 					fence(renderLines(edit, 46)),
 				].join("\n\n"),

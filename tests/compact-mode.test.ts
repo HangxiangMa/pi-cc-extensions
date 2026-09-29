@@ -9,7 +9,7 @@ import {
 	ToolExecutionComponent,
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Container, visibleWidth } from "@earendil-works/pi-tui";
 
 import { config, formatConfigStatus, normalizeConfig } from "../extensions/config/config.ts";
 import { installCompactThinking } from "../extensions/feature/compact-thinking.ts";
@@ -894,6 +894,200 @@ test("compact live: a superseding round folds the previous one immediately", () 
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousDir;
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compact 尾行：摘要行挂 transcript 容器回合末尾，新工具追加后归位", async () => {
+	const { restore } = installHooks();
+	// anchor 挂进容器时（等价于 pi chatContainer），摘要行挂到容器里回合末尾的
+	// 兄弟组件上——运行中恒在可写视口底缘，收尾的 Ran for 才能落进 scrollback。
+	const chat = new Container() as any;
+	setToolMouseTui({ children: [chat] });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "hello" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		const bash = tool("bash", "b1", { command: "one" });
+		chat.addChild(anchor);
+		chat.addChild(bash);
+		anchor.updateContent(message);
+
+		// 摘要行离开 anchor，成为容器里回合末尾的兄弟组件。
+		assert.equal(chat.children.length, 3, `尾行应挂进容器: ${chat.children.length}`);
+		const tail = chat.children[2] as any;
+		assert.ok(tail !== anchor && tail !== bash);
+		assert.ok(isCompactAssistantComponent(tail), "尾行要保留展开接线（click/hover）");
+		assert.ok(
+			!renderText(anchor).some((line) => /Running\.\.\./.test(line)),
+			"anchor 自身渲染不再带摘要行",
+		);
+		assert.match(renderText(tail).join("\n"), /Running\.\.\.(?: · [\d.]+m?s)?, bash×1/);
+
+		// pi 把新工具卡 append 在容器末尾（尾行之后）：updateDisplay 时压回合末位。
+		const message2 = {
+			...message,
+			content: [
+				...message.content,
+				{ type: "toolCall", id: "g1", name: "grep", arguments: { pattern: "x" } },
+			],
+		};
+		anchor.updateContent(message2);
+		const grep = tool("grep", "g1", { pattern: "x" });
+		chat.addChild(grep);
+		assert.equal(chat.children.at(-1), grep, "工具先落在尾行之后");
+		grep.updateDisplay?.();
+		assert.equal(chat.children.at(-1), tail, "尾行应归位到新工具之后");
+
+		// 收尾：尾行原地翻成 Ran for，停在收尾回合与下一条消息之间。
+		const finalMessage = {
+			role: "assistant",
+			timestamp: 2,
+			content: [{ type: "text", text: "done" }],
+		};
+		const final = new AssistantMessageComponent(finalMessage as any, true) as any;
+		chat.addChild(final);
+		final.updateContent(finalMessage);
+		await settleFold();
+		assert.match(renderText(tail).join("\n"), /Ran for .+bash×1.+grep×1/);
+		const order = chat.children.map((c: any) =>
+			c === tail ? "tail" : c === anchor ? "anchor" : c === final ? "final" : "tool",
+		);
+		assert.deepEqual(order, ["anchor", "tool", "tool", "tail", "final"]);
+	} finally {
+		setToolMouseTui(null);
+		restore();
+	}
+});
+
+test("compact 尾行：运行中外来提示行压在计数行之上，收尾后落到摘要之下", async () => {
+	const { restore } = installHooks();
+	const chat = new Container() as any;
+	setToolMouseTui({ children: [chat] });
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "hello" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		const bash = tool("bash", "b1", { command: "one" });
+		chat.addChild(anchor);
+		chat.addChild(bash);
+		anchor.updateContent(message);
+		const tail = chat.children.at(-1) as any;
+
+		// 运行中到达提示行（showStatus 的 Spacer+Text 等价物）：落在尾行之后。
+		const tipSpacer = { render: () => [""] };
+		const tipText = { render: () => ["Updated x: on"] };
+		chat.addChild(tipSpacer);
+		chat.addChild(tipText);
+
+		// 新工具 append 在提示行之后，updateDisplay 触发尾行归位。
+		const message2 = {
+			...message,
+			content: [
+				...message.content,
+				{ type: "toolCall", id: "g1", name: "grep", arguments: { pattern: "x" } },
+			],
+		};
+		anchor.updateContent(message2);
+		const grep = tool("grep", "g1", { pattern: "x" });
+		chat.addChild(grep);
+		grep.updateDisplay?.();
+
+		const order = chat.children.map((c: any) =>
+			c === tail
+				? "tail"
+				: c === anchor
+					? "anchor"
+					: c === tipSpacer || c === tipText
+						? "tip"
+						: "tool",
+		);
+		// 计数行恒在 transcript 最末：提示行不困在成员中间，也不把计数行截成两行。
+		assert.deepEqual(order, ["anchor", "tool", "tool", "tip", "tip", "tail"]);
+
+		// 收尾后摘要行回落回合末位，提示行换到它之下、回合边界之外。
+		const finalMessage = {
+			role: "assistant",
+			timestamp: 2,
+			content: [{ type: "text", text: "done" }],
+		};
+		const final = new AssistantMessageComponent(finalMessage as any, true) as any;
+		chat.addChild(final);
+		final.updateContent(finalMessage);
+		await settleFold();
+		const settled = chat.children.map((c: any) =>
+			c === tail
+				? "tail"
+				: c === anchor
+					? "anchor"
+					: c === tipSpacer || c === tipText
+						? "tip"
+						: c === final
+							? "final"
+							: "tool",
+		);
+		assert.deepEqual(settled, ["anchor", "tool", "tool", "tail", "tip", "tip", "final"]);
+	} finally {
+		setToolMouseTui(null);
+		restore();
+	}
+});
+
+test("compact 尾行：refresh 重建保留挂钟与收尾态，不回摆 Running", async () => {
+	const { hooks, restore } = installHooks();
+	const chat = new Container() as any;
+	setToolMouseTui({ children: [chat] });
+	// 可控时钟：区分「保留时长」与「重建归零」。
+	const realNow = Date.now;
+	let now = 10_000;
+	Date.now = () => now;
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "doing" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		const bash = tool("bash", "b1", { command: "one" });
+		chat.addChild(anchor);
+		chat.addChild(bash);
+		anchor.updateContent(message); // startedAt = 10_000
+		now += 5_000;
+		const finalMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "done" }],
+		};
+		const final = new AssistantMessageComponent(finalMessage as any, true) as any;
+		chat.addChild(final);
+		final.updateContent(finalMessage); // endedAt = 15_000
+		await settleFold();
+		const before = renderText(chat);
+		assert.match(before.join("\n"), /Ran for 5s/, `收尾摘要: ${before}`);
+
+		// 切换设置 → refresh 重建：同一消息回放要继承旧回合，不能回摆 Running、
+		// 不能丢挂钟（Ran for 5s → 1ms）、不能重演静默期槽位卡。
+		now += 60_000;
+		hooks.refresh();
+		const after = renderText(chat);
+		assert.deepEqual(after, before, `refresh 后应与之前一致: ${before} → ${after}`);
+	} finally {
+		Date.now = realNow;
+		setToolMouseTui(null);
+		restore();
 	}
 });
 

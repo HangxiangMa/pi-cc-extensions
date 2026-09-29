@@ -38,6 +38,9 @@ export const TOOL_GROUPING_PATCH_KEY = Symbol.for("pi.ccstyle.tool-grouping-patc
 export const TOOL_GROUPING_PARENT_KEY = Symbol.for("pi.ccstyle.tool-grouping-parent");
 export const TOOL_GROUPING_GENERATION_KEY = Symbol.for("pi.ccstyle.tool-grouping-generation");
 
+// ── regular 主屏渲染补丁 ──
+export const MAIN_SCREEN_DO_RENDER_PATCH = Symbol.for("pi.ccstyle.main-screen-do-render-patch");
+
 // ── 鼠标交互 ──
 export const TOOL_MOUSE_OWNER_KEY = Symbol.for("pi.ccstyle.tool-mouse-owner");
 export const TOOL_MOUSE_TUI_SLOT = Symbol.for("pi.ccstyle.tool-mouse-tui");

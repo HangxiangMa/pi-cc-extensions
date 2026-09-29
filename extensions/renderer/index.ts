@@ -12,7 +12,7 @@ import {
 	installToolExpandedBackground,
 	type DefaultModeHooks,
 } from "./default-mode.ts";
-import { isLazyProxyTui } from "../utils/fullscreen-detect.ts";
+import { installMainScreenDoRenderPatch, isLazyProxyTui } from "../utils/fullscreen-detect.ts";
 import { showCcstylePanel } from "../config/panel.ts";
 import {
 	config,
@@ -116,6 +116,8 @@ export default function (
 		// 渲染层（工具样式/分组）是原型与组件级 patch，fullscreen 官方布局
 		// 同样渲染这些组件，因此两种模式都安装。
 		if (installation) return installation;
+		// regular 主屏的差分渲染补丁：视口上方变化不再触发清回滚的 fullRender。
+		installMainScreenDoRenderPatch();
 		const defaultMode = installDefaultMode(writeExecutionMetadata);
 		const toolGrouping = installToolGrouping(() => config.mode === "on");
 		const compactMode = installCompactMode({
