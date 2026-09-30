@@ -19,6 +19,7 @@ import {
 	toolCallSummary,
 	type ToolCallSummary,
 } from "./names.ts";
+import { toolViewportWidth } from "./result.ts";
 import {
 	patchRegistry,
 	TOOL_GROUPING_GENERATION_KEY as GENERATION_KEY,
@@ -378,7 +379,7 @@ export class ToolGroupComponent extends Container {
 			"",
 			truncateToWidth(
 				` ${fg(overallColor, "●")} ${label}: ${countText}${nameList} ${hint}`,
-				width,
+				toolViewportWidth(width),
 				"…",
 			),
 		];
@@ -411,11 +412,13 @@ export class ToolGroupComponent extends Container {
 				const summary = toolSummary(tool);
 				const prefix = ` ${fg("dim", branch)} ${fg(color, statusIcon(toolStatus))} `;
 				const detail = fg("dim", summary.detail);
-				const mainWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(detail));
+				// 与单工具卡标题同宽，宽屏右侧留白一致
+				const rowWidth = toolViewportWidth(width);
+				const mainWidth = Math.max(0, rowWidth - visibleWidth(prefix) - visibleWidth(detail));
 				lines.push(
 					truncateToWidth(
 						`${prefix}${renderToolSummary(summary, mainWidth, fg)}${detail}`,
-						width,
+						rowWidth,
 						"",
 					),
 				);

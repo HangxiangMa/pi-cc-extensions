@@ -60,7 +60,7 @@ Renderer snapshots for `on` / `compact` modes: [default](./docs/tool-render-exam
   "expandedInputMaxLines": 5,              // expanded tool Input lines; overflow shows a footer hint
   "expandedOutputMaxLines": 10,            // expanded tool Output lines; overflow shows a footer hint
   "expandedPreviewMaxLines": 40,           // max lines for expanded TaskList bodies (expanded diffs always show all)
-  "inputClip": 100,                        // tool summary path/command clip length
+  "inputClip": 0,                          // tool summary path/command clip length; 0 = fit width
   "showStartupHeader": true,               // startup header (logo + tips) toggle
   "scrollStepLines": 3,                    // fullscreen wheel scroll step
 

@@ -5,8 +5,13 @@ import { config } from "../../config/config.ts";
 import { oneLine } from "../../utils/format.ts";
 import { headTruncateToWidth } from "./result.ts";
 
+/** inputClip=0 时不设字符上限，交给渲染时的实际宽度截断。 */
+function clipLimit(): number {
+	return config.inputClip > 0 ? config.inputClip : Number.POSITIVE_INFINITY;
+}
+
 function clip(value: unknown): string {
-	return oneLine(value, config.inputClip);
+	return oneLine(value, clipLimit());
 }
 
 /** 载荷（入参 JSON / 脚本代码）至少留出这么多宽度才显示，否则整段省略（避免只剩一个孤零零的 " {…"）。 */
@@ -125,7 +130,7 @@ export function truncatePathToWidth(path: string, width: number): string {
 
 /** 路径展示的统一入口：相对化后按配置和当前可用宽度截断。 */
 export function formatDisplayPath(value: unknown, cwd: string | undefined, width: number): string {
-	return truncatePathToWidth(displayPath(value, cwd), Math.min(width, config.inputClip));
+	return truncatePathToWidth(displayPath(value, cwd), Math.min(width, clipLimit()));
 }
 
 /** 按最终终端宽度渲染摘要；路径摘要不会再被整行头部截断。 */
@@ -134,7 +139,7 @@ export function fitToolCallSummary(summary: ToolCallSummary, width: number): str
 	const prefix = summary.path.prefix;
 	const pathWidth = Math.max(0, width - visibleWidth(prefix) - 1);
 	if (pathWidth <= 0) return headToWidth(prefix, width, "…");
-	return `${prefix} ${truncatePathToWidth(summary.path.value, Math.min(pathWidth, config.inputClip))}`;
+	return `${prefix} ${truncatePathToWidth(summary.path.value, Math.min(pathWidth, clipLimit()))}`;
 }
 
 function pathSummary(
@@ -145,7 +150,7 @@ function pathSummary(
 ): ToolCallSummary {
 	const path = displayPath(value, cwd);
 	return {
-		main: `${prefix} ${truncatePathToWidth(path, config.inputClip)}`,
+		main: `${prefix} ${truncatePathToWidth(path, clipLimit())}`,
 		detail,
 		path: { prefix, value: path },
 	};
