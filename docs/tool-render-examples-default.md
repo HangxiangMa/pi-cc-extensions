@@ -1,7 +1,7 @@
 # 工具 Render 示例（ccstyle · default）
 
 > 由真实 renderer 驱动生成的示例快照，已剥离 ANSI。
-> 实际 TUI 中包含状态色、背景色和 hover 高亮；Braille loading 帧会随时间变化。
+> 实际 TUI 中包含状态色、背景色和 hover 高亮；Braille loading 帧与耗时快照取固定时钟。
 > 当前版本：ccstyle 0.9.8 · mode=`on`。
 > renderer 变更后请运行 `npm run docs:tool-render` 同步本文件。
 
@@ -186,9 +186,9 @@ write 新建 / 覆盖：
 
 ```text
  ● Multiple Tools: 3 running • read, bash, ffgrep • click to show more
- ├ ⠹ Read extensions/index.ts
- ├ ⠹ Bash npm test
- └ ⠹ Ffgrep "renderCall" in extensions/
+ ├ ⠋ Read extensions/index.ts
+ ├ ⠋ Bash npm test
+ └ ⠋ Ffgrep "renderCall" in extensions/
 ```
 
 ### 收起：完成/失败

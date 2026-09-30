@@ -77,10 +77,19 @@ function fence(lines: string[] | string): string {
 	return `\`\`\`text\n${body}\n\`\`\``;
 }
 
+/** Braille loading 帧与耗时都由挂钟推导；渲染期间固定时钟，保证快照可复现。 */
+const SNAPSHOT_NOW = 0;
+
 function renderLines(component: any, width = WIDTH): string[] {
-	return component
-		.render(width)
-		.map((line: string) => stripAnsi(String(line)).replace(/\s+$/g, ""));
+	const realNow = Date.now;
+	Date.now = () => SNAPSHOT_NOW;
+	try {
+		return component
+			.render(width)
+			.map((line: string) => stripAnsi(String(line)).replace(/\s+$/g, ""));
+	} finally {
+		Date.now = realNow;
+	}
 }
 
 function renderBlock(component: any, width = WIDTH): string {
@@ -95,7 +104,7 @@ function header(modeLabel: string, modeKey: string): string {
 	return `# 工具 Render 示例（ccstyle · ${modeLabel}）
 
 > 由真实 renderer 驱动生成的示例快照，已剥离 ANSI。
-> 实际 TUI 中包含状态色、背景色和 hover 高亮；Braille loading 帧会随时间变化。
+> 实际 TUI 中包含状态色、背景色和 hover 高亮；Braille loading 帧与耗时快照取固定时钟。
 > 当前版本：ccstyle ${version} · mode=\`${modeKey}\`。
 > renderer 变更后请运行 \`npm run docs:tool-render\` 同步本文件。
 `;
