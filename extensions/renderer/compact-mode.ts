@@ -1167,6 +1167,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 				stopRoundTick();
 				return;
 			}
+			settleStrandedRounds();
 			try {
 				// 非 force：保留 fullscreen 布局缓存和差分绘制。
 				uiRef?.requestRender?.();
@@ -1320,12 +1321,36 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		return found;
 	};
 
+	/** 组件在树里的直属父容器。TUI 切换/reparent 后缓存的 container 会过期。 */
+	const containerOfHost = (host: any): any => {
+		let found: any;
+		walkComponentTree(getToolMouseTui(), (value: any) => {
+			if (found) return false;
+			if (Array.isArray(value?.children) && value.children.includes(host)) {
+				found = value;
+				return false;
+			}
+			return undefined;
+		});
+		return found;
+	};
+
+	/** 尾行实际所在容器；缓存的 container 过期时按树找回来。 */
+	const tailHostContainer = (tail: MountedRoundTail): any =>
+		containerOfHost(tail.host) ??
+		(tail.container?.children?.includes?.(tail.host) === true ? tail.container : undefined);
+
+	/** 摘尾行：按实际所在容器摘，避免缓存过期时摘了个空、行留在树上。 */
+	const removeTailHost = (tail: MountedRoundTail): void => {
+		tailHostContainer(tail)?.removeChild?.(tail.host);
+	};
+
 	const ensureTailHost = (round: CompactRound): MountedRoundTail => {
 		if (round.tail) return round.tail;
 		// 同一 anchor 上残留的旧回合尾行（reset/重组后建新回合）先摘除，避免双摘要。
 		const stale = tailByAnchor.get(round.anchor);
 		if (stale) {
-			stale.container?.removeChild?.(stale.host);
+			removeTailHost(stale);
 			mountedTails.delete(stale);
 			tailByAnchor.delete(round.anchor);
 		}
@@ -1410,7 +1435,7 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		const tail = round.tail;
 		if (!tail) return;
 		round.tail = undefined;
-		tail.container?.removeChild?.(tail.host);
+		removeTailHost(tail);
 		mountedTails.delete(tail);
 		if (tailByAnchor.get(round.anchor) === tail) tailByAnchor.delete(round.anchor);
 	};
@@ -1442,7 +1467,11 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 			const stale = tail.round as CompactRound | undefined;
 			if (
 				stale &&
-				(stale.messages.get(round.anchor) === message || stale.detachedMessages.includes(message))
+				// 先认组件：重放时消息对象未必是同一个（会话重读/重建），
+				// 只认消息身份会漏掉本该接回的回合，摘要行就此掉队。
+				(stale.anchor === round.anchor ||
+					stale.messages.has(round.anchor) ||
+					stale.detachedMessages.includes(message))
 			) {
 				prior = stale;
 				break;
@@ -1815,12 +1844,14 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		// 一致；同 anchor 重建回合时 ensureTailHost 去重摘除），非 compact 摘掉，
 		// 别把紧凑摘要带进 default 渲染。
 		for (const tail of [...mountedTails]) {
-			if (tail.container?.children?.includes?.(tail.host) !== true) {
+			const container = tailHostContainer(tail);
+			if (!container) {
 				mountedTails.delete(tail);
 				continue;
 			}
+			tail.container = container;
 			if (config.mode === "compact") continue;
-			tail.container.removeChild(tail.host);
+			container.removeChild(tail.host);
 			mountedTails.delete(tail);
 			if (tail.round?.tail === tail) tail.round.tail = undefined;
 			if (tail.round?.anchor && tailByAnchor.get(tail.round.anchor) === tail) {
@@ -1829,6 +1860,19 @@ export function installCompactMode(deps: CompactModeInstallDeps): CompactModeHoo
 		}
 		deps.query?.setCompactSummaryActive?.(false);
 		stopRoundTick();
+	};
+
+	/**
+	 * 兜底：resetRounds 会丢掉回合索引但保留已挂的尾行，重放没能接回的回合会一直
+	 * active——尾行永远显示 Running...（时长还在涨）却不再计入新工具。既不是活动
+	 * 回合也不在收尾静默期的活回合就地收尾，不让它永远挂在屏幕上。
+	 */
+	const settleStrandedRounds = (): void => {
+		for (const tail of [...mountedTails]) {
+			const round = tail.round as CompactRound | undefined;
+			if (!round?.active || round === activeRound || pendingFoldRounds.has(round)) continue;
+			endRound(round, true);
+		}
 	};
 
 	patch.assistantInstalled = function (this: any, message: any, isStreaming?: boolean) {

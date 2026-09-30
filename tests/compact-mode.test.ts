@@ -1110,6 +1110,70 @@ test("compact 尾行：refresh 重建保留挂钟与收尾态，不回摆 Runnin
 	}
 });
 
+test("compact 尾行：TUI 切换后容器过期，refresh 不另起摘要行", () => {
+	const { hooks, restore } = installHooks();
+	const chat = new Container() as any;
+	setToolMouseTui({ children: [chat] });
+	const realNow = Date.now;
+	let now = 10_000;
+	Date.now = () => now;
+	const summaryRows = (root: any) =>
+		renderText(root).filter((line: string) => /(Running\.\.\.|Ran for)/.test(line));
+	try {
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{ type: "text", text: "doing" },
+				{ type: "toolCall", id: "b1", name: "bash", arguments: { command: "one" } },
+			],
+		};
+		const anchor = new AssistantMessageComponent(message as any, true) as any;
+		const bash = tool("bash", "b1", { command: "one" });
+		chat.addChild(anchor);
+		chat.addChild(bash);
+		anchor.updateContent(message);
+		bash.updateResult({ content: [{ type: "text", text: "out" }], isError: false });
+		now += 5_000;
+		assert.equal(summaryRows(chat).length, 1, "前置：单条摘要行");
+
+		// 模拟 /settings 切 tuiMode：官方把组件搬到新 tui，旧容器不再持有它们，
+		// 尾行缓存的 container 就此过期。
+		const moved = new Container() as any;
+		for (const child of [...chat.children]) moved.addChild(child);
+		chat.children.length = 0;
+		setToolMouseTui({ children: [moved] });
+
+		// 面板改设置 / 会话事件都会走 refresh。
+		hooks.refresh();
+		now += 2_000;
+		const rows = [...summaryRows(moved), ...summaryRows(chat)];
+		assert.equal(rows.length, 1, `只该有一条摘要行: ${renderText(moved)}`);
+		assert.match(rows[0]!, /Running\.\.\. · 7s, bash×1/, "同一回合继续计时");
+
+		// 后续工具仍归这个回合，不另起一行。
+		const next = {
+			role: "assistant",
+			timestamp: 2,
+			content: [{ type: "toolCall", id: "b2", name: "grep", arguments: { pattern: "x" } }],
+		};
+		const nextAnchor = new AssistantMessageComponent(next as any, true) as any;
+		const grep = tool("grep", "b2", { pattern: "x" });
+		moved.addChild(nextAnchor);
+		moved.addChild(grep);
+		nextAnchor.updateContent(next);
+		grep.updateResult({ content: [{ type: "text", text: "hit" }], isError: false });
+		now += 1_000;
+		const after = summaryRows(moved);
+		assert.equal(after.length, 1, `仍只该有一条摘要行: ${renderText(moved)}`);
+		assert.match(after[0]!, /bash×1, grep×1/, "新工具并进同一回合");
+	} finally {
+		Date.now = realNow;
+		setToolMouseTui(null);
+		restore();
+	}
+});
+
 test("compact live: 槽位卡内不重复展开入口，摘要行自己的 hint 保留", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-compact-live-hint-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
