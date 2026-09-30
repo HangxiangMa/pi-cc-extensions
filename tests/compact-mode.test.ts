@@ -7,6 +7,11 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	AssistantMessageComponent,
 	ToolExecutionComponent,
+	createBashToolDefinition,
+	createEditToolDefinition,
+	createGrepToolDefinition,
+	createReadToolDefinition,
+	createWriteToolDefinition,
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, visibleWidth } from "@earendil-works/pi-tui";
@@ -41,8 +46,22 @@ const ui = {
 	requestRender() {},
 } as any;
 
+/**
+ * 内置工具定义按名字构造。pi 0.99 起内置 renderer 由调用方合并（以前 ToolExecutionComponent
+ * 自己查表），这里跟 CLI 的 getRegisteredToolDefinition 保持一致；非内置工具只给名字。
+ */
+const BUILT_IN_TOOL_DEFINITIONS: Record<string, (cwd: string) => any> = {
+	bash: createBashToolDefinition,
+	edit: createEditToolDefinition,
+	grep: createGrepToolDefinition,
+	read: createReadToolDefinition,
+	write: createWriteToolDefinition,
+};
+
 function tool(name: string, id: string, args: any = {}) {
-	return new ToolExecutionComponent(name, id, args, {}, undefined, ui, process.cwd()) as any;
+	const cwd = process.cwd();
+	const definition = BUILT_IN_TOOL_DEFINITIONS[name]?.(cwd) ?? { name };
+	return new ToolExecutionComponent(name, id, args, {}, definition, ui, cwd) as any;
 }
 
 const renderText = (component: any, width = 120): string[] =>
