@@ -185,7 +185,7 @@ write 新建 / 覆盖：
 ### 收起：运行中
 
 ```text
- ● Multiple Tools: 3 running • read, bash, ffgrep • click to show more
+ ● Multiple Tools: 3 running • read, bash, ffgrep • clic…
  ├ ⠋ Read extensions/index.ts
  ├ ⠋ Bash npm test
  └ ⠋ Ffgrep "renderCall" in extensions/
@@ -194,7 +194,7 @@ write 新建 / 覆盖：
 ### 收起：完成/失败
 
 ```text
- ● Multiple Tools: 2 done • 1 failed • read, bash, ffgrep • click to sh…
+ ● Multiple Tools: 2 done • 1 failed • read, bash, ffgre…
  ├ ✓ Read extensions/index.ts
  ├ ✓ Bash npm test
  └ ✗ Ffgrep "renderCall" in extensions/
@@ -203,7 +203,7 @@ write 新建 / 覆盖：
 ### 展开：完整背景卡片
 
 ```text
- ● Multiple Tools: 2 done • 1 failed • read, bash, ffgrep • ↑ Collapse
+ ● Multiple Tools: 2 done • 1 failed • read, bash, ffgre…
  ├ ✓ Read extensions/index.ts
  │ ├ Input
  │ │ path: extensions/index.ts
