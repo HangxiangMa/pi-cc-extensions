@@ -379,7 +379,7 @@ export class ToolGroupComponent extends Container {
 			"",
 			truncateToWidth(
 				` ${fg(overallColor, "●")} ${label}: ${countText}${nameList} ${hint}`,
-				width,
+				toolViewportWidth(width),
 				"…",
 			),
 		];
