@@ -118,11 +118,22 @@ function rememberExtensionStatuses(entries: Iterable<[string, string]>): void {
 	}
 }
 
+export function normalizeFooterPluginText(key: string, text: string): string {
+	return key === "ponytail" || key === "thinking-profile"
+		? text.replace(/\s*\|\s*/g, " ").trim()
+		: text;
+}
+
 function pluginTextsForRender(localUsageChip: string): Map<string, string> {
 	cachedLocalUsageText = stripAnsi(localUsageChip.replace(/[\r\n\t]+/g, " ").trim());
-	const texts = new Map<string, string>(cachedExtensionStatuses);
+	const texts = new Map(
+		[...cachedExtensionStatuses].map(
+			([key, text]) => [key, normalizeFooterPluginText(key, text)] as const,
+		),
+	);
 	if (cachedLocalUsageText) texts.set(PI_USAGE_KEY, cachedLocalUsageText);
 	else texts.delete(PI_USAGE_KEY);
+	// The custom footer owns the separators; keep the requested MCP marker with its chip.
 	return texts;
 }
 
@@ -171,7 +182,7 @@ let refreshCurrentUsage: (() => void) | undefined;
 const createCustomFooterFactory =
 	(ctx: ExtensionContext) => (tui: any, theme: any, footerData: any) => {
 		currentTui = tui;
-		const sep = theme.fg("muted", " · ");
+		const sep = theme.fg("muted", " | ");
 		const joinChips = (parts: string[]) => parts.filter(Boolean).join(sep);
 		let gitStats: GitStats | undefined;
 		let gitRefreshRunning = false;

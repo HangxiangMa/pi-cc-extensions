@@ -13,6 +13,7 @@ import {
 	clearCustomFooter,
 	footerGlyphs,
 	formatXaiFooterChip,
+	normalizeFooterPluginText,
 	parseGitStats,
 } from "../extensions/feature/shell/footer.ts";
 import {
@@ -121,14 +122,16 @@ test("disabled custom footer leaves another extension's footer untouched", () =>
 	}
 });
 
-test("defaultFooterLine sends usage-like keys to line1 and others to line2", () => {
+test("defaultFooterLine keeps usage on line1 and other plugins off the cwd/git line", () => {
 	assert.equal(isSkippedFooterStatusKey("model"), true);
 	assert.equal(defaultFooterLine("usage"), 1);
 	assert.equal(defaultFooterLine("pi-grok-usage"), 1);
 	assert.equal(defaultFooterLine("cloud-quota"), 1);
 	assert.equal(defaultFooterLine(PI_USAGE_KEY), 1);
-	assert.equal(defaultFooterLine("ponytail"), 2);
-	assert.equal(defaultFooterLine("lsp"), 2);
+	assert.equal(defaultFooterLine("cost-monitor"), 3);
+	assert.equal(defaultFooterLine("mcp"), 3);
+	assert.equal(defaultFooterLine("ponytail"), 3);
+	assert.equal(defaultFooterLine("lsp"), 3);
 });
 
 test("resolveFooterChipLayout appends unknown live keys to default lines in alpha order", () => {
@@ -140,8 +143,8 @@ test("resolveFooterChipLayout appends unknown live keys to default lines in alph
 		"cloud-quota",
 	]);
 	assert.deepEqual(resolved.footerLine1Keys, [PI_USAGE_KEY, "cloud-quota", "usage"]);
-	assert.deepEqual(resolved.footerLine2Keys, ["lsp", "ponytail"]);
-	assert.deepEqual(resolved.footerLine3Keys, []);
+	assert.deepEqual(resolved.footerLine2Keys, []);
+	assert.deepEqual(resolved.footerLine3Keys, ["lsp", "ponytail"]);
 	assert.deepEqual(resolved.footerHiddenKeys, []);
 });
 
@@ -149,30 +152,30 @@ test("hidden keys stay on their line and unhide restores the slot", () => {
 	let layout = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail", "lsp"]);
 	layout = toggleFooterKeyHidden(layout, "ponytail");
 	assert.ok(layout.footerHiddenKeys.includes("ponytail"));
-	assert.deepEqual(layout.footerLine2Keys, ["lsp", "ponytail"]);
+	assert.deepEqual(layout.footerLine3Keys, ["lsp", "ponytail"]);
 	layout = toggleFooterKeyHidden(layout, "ponytail");
 	assert.equal(layout.footerHiddenKeys.includes("ponytail"), false);
-	assert.deepEqual(layout.footerLine2Keys, ["lsp", "ponytail"]);
+	assert.deepEqual(layout.footerLine3Keys, ["lsp", "ponytail"]);
 });
 
 test("moveFooterKeyToLine appends to the target line and clamps shift at the ends", () => {
 	let layout = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail", "lsp"]);
 	layout = moveFooterKeyToLine(layout, "ponytail", 3);
-	assert.deepEqual(layout.footerLine3Keys, ["ponytail"]);
-	assert.deepEqual(layout.footerLine2Keys, ["lsp"]);
+	assert.deepEqual(layout.footerLine3Keys, ["lsp", "ponytail"]);
+	assert.deepEqual(layout.footerLine2Keys, []);
 	layout = shiftFooterKeyLine(layout, "ponytail", 1);
-	assert.deepEqual(layout.footerLine3Keys, ["ponytail"]);
+	assert.deepEqual(layout.footerLine3Keys, ["lsp", "ponytail"]);
 	layout = shiftFooterKeyLine(layout, PI_USAGE_KEY, -1);
 	assert.deepEqual(layout.footerLine1Keys, [PI_USAGE_KEY]);
 });
 
 test("reorderFooterKey swaps within a line only", () => {
 	let layout = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail", "lsp"]);
-	assert.deepEqual(layout.footerLine2Keys, ["lsp", "ponytail"]);
+	assert.deepEqual(layout.footerLine3Keys, ["lsp", "ponytail"]);
 	layout = reorderFooterKey(layout, "lsp", 1);
-	assert.deepEqual(layout.footerLine2Keys, ["ponytail", "lsp"]);
+	assert.deepEqual(layout.footerLine3Keys, ["ponytail", "lsp"]);
 	layout = reorderFooterKey(layout, "lsp", 1);
-	assert.deepEqual(layout.footerLine2Keys, ["ponytail", "lsp"]);
+	assert.deepEqual(layout.footerLine3Keys, ["ponytail", "lsp"]);
 });
 
 test("visibleFooterPluginTexts skips hidden and empty, keeps configured order", () => {
@@ -229,6 +232,15 @@ test("line3 paints only when a visible plugin text exists", () => {
 	);
 	assert.deepEqual(hidden, []);
 	assert.deepEqual(shown, ["⚡ FULL"]);
+});
+
+test("profile and ponytail status text drops producer-owned bars", () => {
+	assert.equal(normalizeFooterPluginText("thinking-profile", "| graft: ready |"), "graft: ready");
+	assert.equal(normalizeFooterPluginText("ponytail", "○  | 🐴 ponytail: ⚡"), "○ 🐴 ponytail: ⚡");
+	assert.equal(
+		normalizeFooterPluginText("mcp", "MCP: 4 servers enabled"),
+		"MCP: 4 servers enabled",
+	);
 });
 
 test("formatXaiFooterChip prefers included percent then prepaid dollars", () => {

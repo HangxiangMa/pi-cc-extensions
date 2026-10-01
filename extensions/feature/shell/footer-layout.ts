@@ -28,11 +28,11 @@ export function isSkippedFooterStatusKey(key: string): boolean {
 	return key === SKIP_FOOTER_STATUS_KEY;
 }
 
-/** 未单独配置时的默认行：usage 类和本包用量在 line1，其余 line2。不会默认进 line3。 */
+/** 未单独配置时的默认行：usage 类和本包用量在 line1，其余插件芯片进 line3，保留 cwd/git 的 line2。 */
 export function defaultFooterLine(key: string): FooterLineId {
 	if (key === PI_USAGE_KEY) return 1;
 	if (/usage|quota|balance/i.test(key)) return 1;
-	return 2;
+	return 3;
 }
 
 export function normalizeFooterKeyList(value: unknown): string[] {
@@ -141,7 +141,8 @@ export function resolveFooterChipLayout(
 	};
 	for (const key of extras) {
 		if (defaultFooterLine(key) === 1) next.footerLine1Keys.push(key);
-		else next.footerLine2Keys.push(key);
+		else if (defaultFooterLine(key) === 2) next.footerLine2Keys.push(key);
+		else next.footerLine3Keys.push(key);
 	}
 	return next;
 }
