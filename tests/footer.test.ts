@@ -9,6 +9,7 @@ import {
 import {
 	FOOTER_NERD_ICON_CACHE,
 	FOOTER_NERD_ICON_GIT,
+	alignFooterSides,
 	applyCustomFooter,
 	clearCustomFooter,
 	footerGlyphs,
@@ -232,6 +233,13 @@ test("line3 paints only when a visible plugin text exists", () => {
 	);
 	assert.deepEqual(hidden, []);
 	assert.deepEqual(shown, ["⚡ FULL"]);
+});
+
+test("footer aligns cwd left and model usage right on the first row", () => {
+	const line = alignFooterSides("qcom-private-dotfiles on  main", "model | $0.01", 60);
+	assert.equal(line.startsWith("qcom-private-dotfiles on  main"), true);
+	assert.equal(line.endsWith("model | $0.01"), true);
+	assert.equal(alignFooterSides("left", "right", 5), "right");
 });
 
 test("profile and ponytail status text drops producer-owned bars", () => {

@@ -1,19 +1,18 @@
 /**
  * 自定义底栏：chips + zentui 图标/句子
  *
- * 第一行：model  thinking · ██████░░░░ 45%/200k · 󰆼 42% · $0.01 · 用户排到 line1 的插件芯片
- * 第二行：cwd in session on  branch (+16 −1) · 用户排到 line2 的插件芯片
- * 第三行：仅当 line3 有可见插件芯片时出现
+ * 第一行：左侧 model/usage/cost，右侧 cwd in session on  branch
+ * 第二行：仅当 line3 有可见插件芯片时出现
  *
- *  - line1 短芯片，· 分隔；缓存用 zentui 󰆼，费用 success
- *  - line2 用 zentui 句式 in / on + 
+ *  - line1 短芯片，| 分隔；缓存用 zentui 󰆼，费用 success
+ *  - cwd 用 zentui 句式 in / on + ，并右对齐
  *  - 当前模型用量：优先 pi-usage 的 usage 状态；xAI 等不写 statusline 的供应商由本扩展补拉
  *
  * 模型/计费/思考级别变化时自动更新（pi.on 全局事件 + render 实时计算）
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -66,6 +65,16 @@ export function parseGitStats(stdout: string): GitStats {
 		}
 	}
 	return { add, del };
+}
+
+export function alignFooterSides(left: string, right: string, width: number): string {
+	if (width <= 0) return "";
+	if (!right) return truncateToWidth(left, width, "");
+	const rightText = truncateToWidth(right, width, "");
+	const rightWidth = visibleWidth(rightText);
+	if (rightWidth >= width) return rightText;
+	const leftText = truncateToWidth(left, Math.max(0, width - rightWidth - 1), "…");
+	return `${leftText}${" ".repeat(Math.max(1, width - visibleWidth(leftText) - rightWidth))}${rightText}`;
 }
 
 export function formatXaiFooterChip(report: XaiFooterReport): string | undefined {
@@ -398,7 +407,7 @@ const createCustomFooterFactory =
 					? theme.fg("dim", `$${cost.toFixed(2)}`) +
 						(usingSubscription ? theme.fg("warning", " sub") : "")
 					: "";
-			const line1 = joinChips([
+			const line1Left = joinChips([
 				theme.fg("accent", modelLabel),
 				model?.reasoning ? thinkingColor(thinkingLevelStr) : "",
 				barGauge(percent ?? 0) + theme.fg("dim", ` ${pctLabel}/${fmt(contextWindow)}`),
@@ -426,14 +435,11 @@ const createCustomFooterFactory =
 				const gitLabel = glyphs.git ? `${glyphs.git} ${branch}` : branch;
 				place += theme.fg("muted", " on ") + gitColor(gitLabel) + stats;
 			}
-			const line2 = joinChips([place, ...line2Plugins]);
-			const line3 = joinChips(line3Plugins);
+			const line1LeftWithCwd = joinChips([place, ...line2Plugins]);
+			const line1 = alignFooterSides(line1LeftWithCwd, line1Left, width);
+			const line2 = joinChips(line3Plugins);
 
-			return [
-				truncateToWidth(line1, width),
-				...(line2 ? [truncateToWidth(line2, width)] : []),
-				...(line3 ? [truncateToWidth(line3, width)] : []),
-			];
+			return [line1, ...(line2 ? [truncateToWidth(line2, width)] : [])];
 		};
 
 		return {
