@@ -7,16 +7,20 @@ import {
 	type Component,
 } from "@earendil-works/pi-tui";
 import { TOOL_LOADING_INTERVAL_MS, toolLoadingIcon } from "../../utils/tool-loading-icon.ts";
-import { isToolTuiFullscreen, showMoreHintText } from "./show-more-hint.ts";
+import { getToolMouseTui } from "../mouse/scroll.ts";
+import { mcpToolTitle } from "./mcp-title.ts";
+import { collapseHintText, isToolTuiFullscreen, showMoreHintText } from "./show-more-hint.ts";
 import { stripAnsi, stripBackgroundAnsi, stripLeadingStatusIcon } from "../../utils/ansi-text.ts";
 import { walkComponentTree } from "../../utils/component-tree.ts";
 import {
 	fitToolCallSummary,
 	humanizeToolLabel,
 	mcpToolDisplayName,
+	renderToolSummary,
 	toolCallSummary,
 	type ToolCallSummary,
 } from "./names.ts";
+import { toolViewportWidth } from "./result.ts";
 import {
 	patchRegistry,
 	TOOL_GROUPING_GENERATION_KEY as GENERATION_KEY,
@@ -42,6 +46,19 @@ type Patch = {
 
 function toolName(tool: any): string {
 	return String(tool?.toolName ?? tool?.toolDefinition?.name ?? "tool");
+}
+
+/**
+ * 标题：MCP 工具用 adapter 暴露的真实工具名，其余回退工具名人性化。
+ */
+function toolTitle(tool: any): string {
+	const name = toolName(tool);
+	return (
+		mcpToolTitle({
+			toolName: name,
+			definition: tool?.toolDefinition ?? tool?.builtInToolDefinition,
+		}) ?? humanizeToolLabel(name)
+	);
 }
 
 function isGroupable(value: unknown): boolean {
@@ -90,16 +107,36 @@ function scheduleGroupAnimation(patch: Patch): void {
 	patch.animationTimer = setTimeout(() => {
 		patch.animationTimer = null;
 		if (!patch.active) return;
+		let needsRender = false;
 		for (const group of patch.groups) {
 			if (
 				(group.children as any[]).some(
 					(tool) => tool?.executionStarted && status(tool) === "pending",
 				)
-			)
+			) {
 				group.invalidate();
+				// 分组卡不是 ToolExecutionComponent：它的 invalidate() 不会请求渲染，
+				// 不补这一步 spinner 只在别人渲染时才跳帧（并行工具下表现为卡顿/冻结）。
+				needsRender = true;
+			}
 		}
+		if (needsRender) requestAnimationRender(patch);
 	}, TOOL_LOADING_INTERVAL_MS);
 	patch.animationTimer.unref?.();
+}
+
+/** 借用子工具卡的 ui 请求一帧；子卡缺失时回退到扩展持有的 TUI 槽。 */
+function requestAnimationRender(patch: Patch): void {
+	for (const group of patch.groups) {
+		const ui = (group.children as any[]).find(
+			(tool) => typeof tool?.ui?.requestRender === "function",
+		)?.ui;
+		if (ui) {
+			ui.requestRender();
+			return;
+		}
+	}
+	getToolMouseTui()?.requestRender?.();
 }
 
 function visibleLines(lines: string[]): string[] {
@@ -149,8 +186,8 @@ export function paddedBackgroundRow(
 }
 
 function toolSummary(tool: any): ToolCallSummary {
-	if (isDelegatingTool(tool)) return { main: mcpToolDisplayName(tool?.args), detail: "" };
 	return toolCallSummary(toolName(tool), tool?.args ?? {}, {
+		title: toolTitle(tool),
 		variant: "grouping",
 		cwd: tool?.cwd,
 	});
@@ -190,6 +227,15 @@ type SettledGroupCache = {
 	lines: string[];
 };
 
+type ExpandedGroupCache = {
+	width: number;
+	hover: boolean;
+	theme: unknown;
+	fullscreen: boolean;
+	paints: readonly unknown[];
+	lines: string[];
+};
+
 export class ToolGroupComponent extends Container {
 	readonly toolCallId = `ccstyle-tool-group-${nextGroupId++}`;
 	readonly toolName = "Tool group";
@@ -200,8 +246,10 @@ export class ToolGroupComponent extends Container {
 	}
 	private hintHovered = false;
 	private readonly patch: Patch;
-	/** 仅缓存已完成且折叠的分组；pending / expanded 每帧现算。 */
+	/** 仅缓存已完成且折叠的分组；pending 每帧现算。 */
 	private settledCache: SettledGroupCache | undefined;
+	/** 展开分组：子工具 paint 引用未变则复用整卡行。 */
+	private expandedPaintCache: ExpandedGroupCache | undefined;
 
 	constructor(patch: Patch) {
 		super();
@@ -209,14 +257,19 @@ export class ToolGroupComponent extends Container {
 		patch.groups.add(this);
 	}
 
-	addTool(tool: any): void {
+	private clearPaintCache(): void {
 		this.settledCache = undefined;
+		this.expandedPaintCache = undefined;
+	}
+
+	addTool(tool: any): void {
+		this.clearPaintCache();
 		this.children.push(tool);
 		tool[PARENT_KEY] = this;
 	}
 
 	releaseTools(): any[] {
-		this.settledCache = undefined;
+		this.clearPaintCache();
 		const tools = [...this.children];
 		this.children.length = 0;
 		this.patch.groups.delete(this);
@@ -224,21 +277,21 @@ export class ToolGroupComponent extends Container {
 	}
 
 	removeTool(tool: any): void {
-		this.settledCache = undefined;
+		this.clearPaintCache();
 		const index = this.children.indexOf(tool);
 		if (index >= 0) this.children.splice(index, 1);
 		if (tool?.[PARENT_KEY] === this) delete tool[PARENT_KEY];
 	}
 
 	setExpanded(expanded: boolean): void {
-		if (this._expanded !== expanded) this.settledCache = undefined;
+		if (this._expanded !== expanded) this.clearPaintCache();
 		this._expanded = expanded;
 		for (const tool of this.children)
 			(tool as Component & { setExpanded?: (expanded: boolean) => void }).setExpanded?.(expanded);
 	}
 
 	setHintHovered(hovered: boolean): void {
-		if (this.hintHovered !== hovered) this.settledCache = undefined;
+		if (this.hintHovered !== hovered) this.clearPaintCache();
 		this.hintHovered = hovered;
 	}
 
@@ -267,7 +320,7 @@ export class ToolGroupComponent extends Container {
 	}
 
 	invalidate(): void {
-		this.settledCache = undefined;
+		this.clearPaintCache();
 		for (const tool of this.children) tool.invalidate?.();
 	}
 
@@ -332,7 +385,7 @@ export class ToolGroupComponent extends Container {
 		const label = allMcp
 			? "MCP"
 			: names.size === 1
-				? humanizeToolLabel(toolName(this.children[0]))
+				? toolTitle(this.children[0])
 				: "Multiple Tools";
 		const overall: ToolStatus = counts.error ? "error" : counts.pending ? "pending" : "success";
 		if (
@@ -342,16 +395,34 @@ export class ToolGroupComponent extends Container {
 		const overallColor = overall === "pending" ? "accent" : overall;
 		const nameList = allDelegating || names.size > 1 ? ` ${fg("dim", `• ${toolNameList(this.children)}`)}` : "";
 		// 圆点保持 dim；hover 只高亮可点击文字。
-		const hint = `${fg("dim", "•")} ${fg(this.hintHovered ? "text" : "dim", showMoreHintText())}`;
+		const hintText = this._expanded ? collapseHintText() : showMoreHintText();
+		const hint = `${fg("dim", "•")} ${fg(this.hintHovered ? "text" : "dim", hintText)}`;
 		const lines = [
 			"",
 			truncateToWidth(
 				` ${fg(overallColor, "●")} ${label}: ${countText}${nameList} ${hint}`,
-				width,
+				toolViewportWidth(width),
 				"…",
 			),
 		];
 		const total = this.children.length;
+		const childPaints = this._expanded
+			? (this.children as any[]).map((tool) => tool.render?.(Math.max(1, width - 2)))
+			: undefined;
+		if (this._expanded && childPaints) {
+			const expandedHit = this.expandedPaintCache;
+			if (
+				expandedHit &&
+				expandedHit.width === width &&
+				expandedHit.hover === this.hintHovered &&
+				expandedHit.theme === this.patch.theme &&
+				expandedHit.fullscreen === isToolTuiFullscreen() &&
+				expandedHit.paints.length === childPaints.length &&
+				expandedHit.paints.every((paint, index) => paint === childPaints[index])
+			) {
+				return expandedHit.lines;
+			}
+		}
 		const expandedLines: string[] = [];
 		for (let index = 0; index < total; index++) {
 			const tool = this.children[index];
@@ -363,17 +434,19 @@ export class ToolGroupComponent extends Container {
 				const summary = toolSummary(tool);
 				const prefix = ` ${fg("dim", branch)} ${fg(color, statusIcon(toolStatus))} `;
 				const detail = fg("dim", summary.detail);
-				const mainWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(detail));
+				// 与单工具卡标题同宽，宽屏右侧留白一致
+				const rowWidth = toolViewportWidth(width);
+				const mainWidth = Math.max(0, rowWidth - visibleWidth(prefix) - visibleWidth(detail));
 				lines.push(
 					truncateToWidth(
-						`${prefix}${fg("toolTitle", fitToolCallSummary(summary, mainWidth))}${detail}`,
-						width,
+						`${prefix}${renderToolSummary(summary, mainWidth, fg)}${detail}`,
+						rowWidth,
 						"",
 					),
 				);
 				continue;
 			}
-			const rendered = visibleLines(tool.render(Math.max(1, width - 2)));
+			const rendered = visibleLines(Array.isArray(childPaints?.[index]) ? childPaints[index] : []);
 			if (rendered.length) {
 				rendered[0] = stripLeadingStatusIcon(rendered[0])
 					.replace(/^ +/, "")
@@ -398,6 +471,14 @@ export class ToolGroupComponent extends Container {
 				lines.push(paddedBackgroundRow(theme, backgroundSlot, line, width));
 			}
 			lines.push(paddedBackgroundRow(theme, backgroundSlot, "", width));
+			this.expandedPaintCache = {
+				width,
+				hover: this.hintHovered,
+				theme: this.patch.theme,
+				fullscreen: isToolTuiFullscreen(),
+				paints: childPaints ?? [],
+				lines,
+			};
 		} else if (counts.pending === 0) {
 			this.storeSettledCache(width, lines);
 		}
