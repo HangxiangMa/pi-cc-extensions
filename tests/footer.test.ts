@@ -13,6 +13,7 @@ import {
 	applyCustomFooter,
 	clearCustomFooter,
 	footerGlyphs,
+	formatCachePercent,
 	formatXaiFooterChip,
 	normalizeFooterPluginText,
 	parseGitStats,
@@ -233,6 +234,12 @@ test("line3 paints only when a visible plugin text exists", () => {
 	);
 	assert.deepEqual(hidden, []);
 	assert.deepEqual(shown, ["⚡ FULL"]);
+});
+
+test("cache hit rate keeps a fixed one-decimal width", () => {
+	assert.equal(formatCachePercent(99.2), "99.2%");
+	assert.equal(formatCachePercent(9.2), " 9.2%");
+	assert.equal(formatCachePercent(100), "100.0%");
 });
 
 test("footer aligns cwd left and model usage right on the first row", () => {

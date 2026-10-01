@@ -77,6 +77,11 @@ export function alignFooterSides(left: string, right: string, width: number): st
 	return `${leftText}${" ".repeat(Math.max(1, width - visibleWidth(leftText) - rightWidth))}${rightText}`;
 }
 
+export function formatCachePercent(percent: number): string {
+	const clamped = Math.max(0, Math.min(100, percent));
+	return `${clamped.toFixed(1).padStart(4, " ")}%`;
+}
+
 export function formatXaiFooterChip(report: XaiFooterReport): string | undefined {
 	const included = report.buckets?.find((b) => b.id === "included-allowance");
 	if (included?.unit === "percent" && typeof included.used === "number") {
@@ -401,7 +406,9 @@ const createCustomFooterFactory =
 			const cachePct = getCachePct();
 			const glyphs = footerGlyphs(config.footerNerdIcons);
 			const cacheLabel =
-				cachePct > 0 ? `${glyphs.cache ? `${glyphs.cache} ` : ""}${Math.floor(cachePct)}%` : "";
+				cachePct > 0
+					? `${glyphs.cache ? `${glyphs.cache} ` : ""}${formatCachePercent(cachePct)}`
+					: "";
 			const costChip =
 				cost || usingSubscription
 					? theme.fg("dim", `$${cost.toFixed(2)}`) +
