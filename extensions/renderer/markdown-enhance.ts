@@ -152,6 +152,48 @@ function deCircled(markdown: string): string {
 }
 
 // ============================================================================
+// <br> 标签规整
+// ============================================================================
+
+// 模型有时把 <br> 当换行写进回复；pi 的终端 Markdown 不解释 HTML，会原样打印。
+// 独立成行的 <br> 变成段落空行，行内 <br> 变成一个空格。代码块与行内代码保持原样。
+const BR_TAG_LINE = /^[ \t]*<br\s*\/?>[ \t]*$/i;
+const BR_TAG_INLINE = /[ \t]*<br\s*\/?>[ \t]*/gi;
+
+/** 对一段非代码文本做 <br> 规整。 */
+function normaliseBrText(text: string): string {
+	return text.replace(BR_TAG_INLINE, " ");
+}
+
+/** 跳过代码块与行内代码，只规整其余部分的 <br>。 */
+function normalizeBrTags(markdown: string): string {
+	const lines = markdown.split("\n");
+	const out: string[] = [];
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i];
+		if (line.match(FENCE_OPEN)) {
+			// 代码块原样保留，直到闭合围栏（未闭合则保留到结尾）。
+			const end = collectFence(lines, i);
+			const stop = end ? end.next : lines.length;
+			out.push(...lines.slice(i, stop));
+			i = stop;
+			continue;
+		}
+		if (BR_TAG_LINE.test(line)) {
+			out.push("");
+			i++;
+			continue;
+		}
+		// 行内代码按反引号分段，偶数段是正文，奇数段是代码。
+		const parts = line.split(/(`+[^`]*?`+)/);
+		out.push(parts.map((part, idx) => (idx % 2 === 1 ? part : normaliseBrText(part))).join(""));
+		i++;
+	}
+	return out.join("\n");
+}
+
+// ============================================================================
 // 跨行链接规整
 // ============================================================================
 
@@ -239,6 +281,7 @@ export default function (pi: ExtensionAPI): void {
 		const { messageType, isStreaming = false } = context ?? {};
 		// thinking 保持原文；普通回复即使流式中也先关闭跨行链接的空白点击区。
 		if (messageType === "assistant-thinking") return markdown;
+		if (messageType === "assistant") markdown = normalizeBrTags(markdown);
 		markdown = normalizeMultilineLinks(markdown);
 		if (isStreaming) return markdown;
 		// 0. 圈数字转半角括号（Nerd Font 补丁字形缺陷规避）
